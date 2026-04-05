@@ -41,6 +41,35 @@ VITE_AUTH_USER_EMAIL=user@readmd.local
 - ไฟล์ `.env` ห้ามอัปขึ้น GitHub
 - โปรเจกต์นี้ตั้ง `.gitignore` กันไว้แล้ว
 
+## 2.1 ตั้งค่าให้ GitHub Pages build ได้ด้วย
+
+เพราะเว็บนี้ถูก build บน GitHub Actions ก่อนขึ้น Pages ดังนั้นค่า `VITE_...` ต้องถูกใส่ใน GitHub ด้วย ไม่ใช่มีแค่ในเครื่อง
+
+ไปที่ repo นี้บน GitHub:
+
+`Settings > Secrets and variables > Actions`
+
+สร้างค่าเหล่านี้:
+
+### Variables
+
+- `VITE_SUPABASE_URL`
+- `VITE_SUPABASE_PRIVATE_BUCKET`
+- `VITE_AUTH_ADMIN_EMAIL`
+- `VITE_AUTH_USER_EMAIL`
+
+### Secret
+
+- `VITE_SUPABASE_ANON_KEY`
+
+ค่าที่แนะนำ:
+
+- `VITE_SUPABASE_PRIVATE_BUCKET=private-docs`
+- `VITE_AUTH_ADMIN_EMAIL=thirasak@readmd.local`
+- `VITE_AUTH_USER_EMAIL=user@readmd.local`
+
+เมื่อ push โค้ดใหม่ GitHub Actions จะเอาค่าเหล่านี้ไป build ให้หน้าเว็บบน Pages ใช้ Supabase ได้จริง
+
 ## 3. รัน schema สำหรับฐานข้อมูล
 
 1. ไปที่ `SQL Editor`
