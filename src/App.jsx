@@ -1,24 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
-import {
-  authAliases,
-  hasSupabaseConfig,
-  privateBucketName,
-  supabase,
-} from './supabaseClient'
 
 const fallbackDocs = [
   {
-    id: 'public:welcome.md',
+    id: 'welcome',
     title: 'Welcome Guide',
     description: 'คู่มือทดลองระบบอ่านต่อและมาร์กจุดสำคัญ',
     folderPath: '',
     folderLabel: 'เริ่มต้นใช้งาน',
     relativePath: 'welcome.md',
-    sourceType: 'public',
     path: 'docs/welcome.md',
-    accessRole: 'shared',
-    storagePath: null,
   },
 ]
 
@@ -73,17 +64,7 @@ function folderPathToLabel(folderPath) {
     .join(' / ')
 }
 
-function buildDocRecord({
-  id,
-  title,
-  description,
-  relativePath,
-  sourcePath,
-  rawUrl,
-  sourceType = 'public',
-  accessRole = 'shared',
-  storagePath = null,
-}) {
+function buildDocRecord({ id, title, description, relativePath, sourcePath, rawUrl }) {
   const normalizedPath = relativePath.replace(/^docs\//, '')
   const segments = normalizedPath.split('/')
   const fileName = segments.at(-1) ?? normalizedPath
@@ -93,50 +74,11 @@ function buildDocRecord({
     id,
     title,
     description,
-    sourceType,
     folderPath,
     folderLabel: folderPathToLabel(folderPath),
     relativePath: normalizedPath,
     fileName,
     path: rawUrl ?? sourcePath,
-    accessRole,
-    storagePath,
-  }
-}
-
-function resolveAllowedRoles(role) {
-  if (role === 'admin') {
-    return ['shared', 'user', 'admin']
-  }
-
-  return ['shared', 'user']
-}
-
-function inferProfileFromEmail(email) {
-  if (!email) {
-    return null
-  }
-
-  if (email === authAliases.thirasak) {
-    return {
-      username: 'Thirasak',
-      display_name: 'Thirasak',
-      role: 'admin',
-    }
-  }
-
-  if (email === authAliases.user) {
-    return {
-      username: 'User',
-      display_name: 'User',
-      role: 'user',
-    }
-  }
-
-  return {
-    username: email.split('@')[0] ?? 'reader',
-    display_name: email,
-    role: 'user',
   }
 }
 
@@ -233,45 +175,8 @@ function detectCurrentPassage(article) {
   return getPassageSnapshot(article, activeIndex)
 }
 
-function groupDocs(docs) {
-  const groups = new Map()
-
-  docs.forEach((doc) => {
-    const key = doc.folderPath || '__root__'
-
-    if (!groups.has(key)) {
-      groups.set(key, {
-        key,
-        folderPath: doc.folderPath,
-        label: doc.folderLabel,
-        docs: [],
-      })
-    }
-
-    groups.get(key).docs.push(doc)
-  })
-
-  return [...groups.values()]
-    .map((group) => ({
-      ...group,
-      docs: group.docs.sort((left, right) => left.title.localeCompare(right.title)),
-    }))
-    .sort((left, right) => {
-      if (left.folderPath === '' && right.folderPath !== '') {
-        return -1
-      }
-
-      if (left.folderPath !== '' && right.folderPath === '') {
-        return 1
-      }
-
-      return left.label.localeCompare(right.label)
-    })
-}
-
 function App() {
-  const [publicDocs, setPublicDocs] = useState(fallbackDocs)
-  const [privateDocs, setPrivateDocs] = useState([])
+  const [docs, setDocs] = useState(fallbackDocs)
   const [view, setView] = useState('library')
   const [activeDocId, setActiveDocId] = useState(null)
   const [content, setContent] = useState('')
@@ -281,14 +186,7 @@ function App() {
   const [currentPassage, setCurrentPassage] = useState(emptyPassage)
   const [isLoadingLibrary, setIsLoadingLibrary] = useState(true)
   const [isLoadingContent, setIsLoadingContent] = useState(false)
-  const [isLoadingPrivateDocs, setIsLoadingPrivateDocs] = useState(false)
   const [libraryRefreshToken, setLibraryRefreshToken] = useState(0)
-  const [session, setSession] = useState(null)
-  const [profile, setProfile] = useState(null)
-  const [authReady, setAuthReady] = useState(false)
-  const [isAuthBusy, setIsAuthBusy] = useState(false)
-  const [authMessage, setAuthMessage] = useState('')
-  const [loginForm, setLoginForm] = useState({ username: '', password: '' })
   const articleRef = useRef(null)
   const saveTimerRef = useRef(null)
   const scrollFrameRef = useRef(null)
@@ -297,42 +195,57 @@ function App() {
   const savedProgressRef = useRef(0)
   const lastScrollSampleRef = useRef(0)
 
-  const publicLibraryDocs = useMemo(
-    () =>
-      publicDocs.map((doc, index) => ({
-        ...doc,
-        progress: readStoredProgress(doc.id),
-        bookmark: readStoredBookmark(doc.id),
-        shelfTone: index % 4,
-      })),
-    [publicDocs, libraryRefreshToken],
-  )
-
-  const privateLibraryDocs = useMemo(
-    () =>
-      privateDocs.map((doc, index) => ({
-        ...doc,
-        progress: readStoredProgress(doc.id),
-        bookmark: readStoredBookmark(doc.id),
-        shelfTone: index % 4,
-      })),
-    [privateDocs, libraryRefreshToken],
+  const activeDoc = useMemo(
+    () => docs.find((doc) => doc.id === activeDocId) ?? null,
+    [docs, activeDocId],
   )
 
   const libraryDocs = useMemo(
-    () => [...publicLibraryDocs, ...privateLibraryDocs],
-    [publicLibraryDocs, privateLibraryDocs],
+    () =>
+      docs.map((doc, index) => ({
+        ...doc,
+        progress: readStoredProgress(doc.id),
+        bookmark: readStoredBookmark(doc.id),
+        shelfTone: index % 4,
+      })),
+    [docs, libraryRefreshToken],
   )
 
-  const activeDoc = useMemo(
-    () => libraryDocs.find((doc) => doc.id === activeDocId) ?? null,
-    [libraryDocs, activeDocId],
-  )
+  const libraryGroups = useMemo(() => {
+    const groups = new Map()
 
-  const publicGroups = useMemo(() => groupDocs(publicLibraryDocs), [publicLibraryDocs])
-  const privateGroups = useMemo(() => groupDocs(privateLibraryDocs), [privateLibraryDocs])
-  const signedInLabel =
-    profile?.display_name ?? profile?.username ?? session?.user?.email ?? 'Reader'
+    libraryDocs.forEach((doc) => {
+      const key = doc.folderPath || '__root__'
+
+      if (!groups.has(key)) {
+        groups.set(key, {
+          key,
+          folderPath: doc.folderPath,
+          label: doc.folderLabel,
+          docs: [],
+        })
+      }
+
+      groups.get(key).docs.push(doc)
+    })
+
+    return [...groups.values()]
+      .map((group) => ({
+        ...group,
+        docs: group.docs.sort((left, right) => left.title.localeCompare(right.title)),
+      }))
+      .sort((left, right) => {
+        if (left.folderPath === '' && right.folderPath !== '') {
+          return -1
+        }
+
+        if (left.folderPath !== '' && right.folderPath === '') {
+          return 1
+        }
+
+        return left.label.localeCompare(right.label)
+      })
+  }, [libraryDocs])
 
   useEffect(() => {
     currentPassageRef.current = currentPassage
@@ -351,7 +264,7 @@ function App() {
 
       if (!repoInfo) {
         if (!cancelled) {
-          setPublicDocs(fallbackDocs)
+          setDocs(fallbackDocs)
           setStatus('พร้อมอ่านจากเอกสารในเครื่องและไฟล์ตัวอย่าง')
           setIsLoadingLibrary(false)
         }
@@ -379,24 +292,23 @@ function App() {
             const relativePath = item.path.replace(/^public\/docs\//, '')
 
             return buildDocRecord({
-              id: `public:${relativePath.toLowerCase()}`,
+              id: relativePath.toLowerCase(),
               title: fileNameToTitle(relativePath.split('/').at(-1) ?? relativePath),
-              description: 'เปิดอ่านจากคลัง Markdown บน GitHub ของคุณ',
+              description: 'เปิดอ่านจากคลัง Markdown ใน GitHub ของคุณ',
               relativePath,
               sourcePath: `docs/${relativePath}`,
               rawUrl: `https://raw.githubusercontent.com/${repoInfo.owner}/${repoInfo.repo}/${repoInfo.branch}/${item.path}`,
-              sourceType: 'public',
             })
           })
           .sort((left, right) => left.title.localeCompare(right.title))
 
         if (!cancelled) {
-          setPublicDocs(markdownDocs.length > 0 ? markdownDocs : fallbackDocs)
+          setDocs(markdownDocs.length > 0 ? markdownDocs : fallbackDocs)
           setStatus('เลือกเอกสารจากชั้นหนังสือแล้วเริ่มอ่านต่อได้ทันที')
         }
       } catch (error) {
         if (!cancelled) {
-          setPublicDocs(fallbackDocs)
+          setDocs(fallbackDocs)
           setStatus(`ใช้รายการสำรองแทน: ${String(error.message ?? error)}`)
         }
       } finally {
@@ -414,176 +326,6 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (!hasSupabaseConfig || !supabase) {
-      setAuthReady(true)
-      setSession(null)
-      setProfile(null)
-      setPrivateDocs([])
-      return
-    }
-
-    let active = true
-    setAuthReady(false)
-
-    supabase.auth.getSession().then(({ data }) => {
-      if (!active) {
-        return
-      }
-
-      setSession(data.session ?? null)
-      setAuthReady(true)
-    })
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      if (!active) {
-        return
-      }
-
-      setSession(nextSession ?? null)
-      setAuthReady(true)
-
-      if (!nextSession) {
-        setProfile(null)
-        setPrivateDocs([])
-      }
-    })
-
-    return () => {
-      active = false
-      subscription.unsubscribe()
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!hasSupabaseConfig || !supabase || !authReady) {
-      return
-    }
-
-    if (!session?.user) {
-      setProfile(null)
-      return
-    }
-
-    let cancelled = false
-
-    async function loadProfile() {
-      const fallbackProfile = inferProfileFromEmail(session.user.email)
-
-      try {
-        const { data, error } = await supabase
-          .from('profiles')
-          .select('username, display_name, role')
-          .eq('id', session.user.id)
-          .maybeSingle()
-
-        if (error) {
-          throw error
-        }
-
-        if (!cancelled) {
-          setProfile(data ?? fallbackProfile)
-        }
-      } catch {
-        if (!cancelled) {
-          setProfile(fallbackProfile)
-        }
-      }
-    }
-
-    loadProfile()
-
-    return () => {
-      cancelled = true
-    }
-  }, [authReady, session])
-
-  useEffect(() => {
-    if (!hasSupabaseConfig || !supabase || !authReady) {
-      return
-    }
-
-    if (!session?.user || !profile?.role) {
-      setPrivateDocs([])
-      setIsLoadingPrivateDocs(false)
-      return
-    }
-
-    let cancelled = false
-
-    async function loadPrivateDocs() {
-      setIsLoadingPrivateDocs(true)
-
-      try {
-        const allowedRoles = resolveAllowedRoles(profile.role)
-        const { data, error } = await supabase
-          .from('private_documents')
-          .select('title, description, folder_path, storage_path, access_role')
-          .in('access_role', allowedRoles)
-          .order('folder_path', { ascending: true })
-          .order('title', { ascending: true })
-
-        if (error) {
-          throw error
-        }
-
-        const docs = (data ?? []).map((row) => {
-          const storagePath = row.storage_path.replace(/^\/+/, '')
-          const fileName = storagePath.split('/').at(-1) ?? storagePath
-          const folderPath = row.folder_path?.replace(/^\/+|\/+$/g, '') ?? ''
-          const relativePath = folderPath ? `${folderPath}/${fileName}` : fileName
-
-          return buildDocRecord({
-            id: `private:${storagePath.toLowerCase()}`,
-            title: row.title || fileNameToTitle(fileName),
-            description:
-              row.description || 'เปิดอ่านจากคลังส่วนตัวที่ซ่อนด้วยสิทธิ์ผู้ใช้',
-            relativePath,
-            sourcePath: storagePath,
-            sourceType: 'private',
-            accessRole: row.access_role ?? 'user',
-            storagePath,
-          })
-        })
-
-        if (!cancelled) {
-          setPrivateDocs(docs)
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setPrivateDocs([])
-          setAuthMessage(`โหลดคลังส่วนตัวไม่สำเร็จ: ${String(error.message ?? error)}`)
-        }
-      } finally {
-        if (!cancelled) {
-          setIsLoadingPrivateDocs(false)
-        }
-      }
-    }
-
-    loadPrivateDocs()
-
-    return () => {
-      cancelled = true
-    }
-  }, [authReady, session, profile])
-
-  useEffect(() => {
-    if (view !== 'reader' || !activeDocId || activeDoc) {
-      return
-    }
-
-    setView('library')
-    setContent('')
-    setBookmark(null)
-    setSavedProgress(0)
-    setCurrentPassage(emptyPassage)
-    setStatus('เอกสารนี้ถูกซ่อนหรือคุณไม่มีสิทธิ์เข้าถึงแล้ว')
-    window.scrollTo({ top: 0, behavior: 'auto' })
-  }, [view, activeDoc, activeDocId])
-
-  useEffect(() => {
     if (view !== 'reader' || !activeDoc) {
       return
     }
@@ -598,34 +340,16 @@ function App() {
         setContent('')
         window.scrollTo({ top: 0, behavior: 'auto' })
 
-        let markdown = ''
+        const source = activeDoc.path.startsWith('http')
+          ? activeDoc.path
+          : publicUrl(activeDoc.path)
+        const response = await fetch(source)
 
-        if (activeDoc.sourceType === 'private') {
-          if (!supabase || !activeDoc.storagePath) {
-            throw new Error('ยังไม่ได้ตั้งค่า Supabase สำหรับไฟล์ส่วนตัว')
-          }
-
-          const { data, error } = await supabase.storage
-            .from(privateBucketName)
-            .download(activeDoc.storagePath)
-
-          if (error) {
-            throw error
-          }
-
-          markdown = await data.text()
-        } else {
-          const source = activeDoc.path.startsWith('http')
-            ? activeDoc.path
-            : publicUrl(activeDoc.path)
-          const response = await fetch(source)
-
-          if (!response.ok) {
-            throw new Error(`โหลดไฟล์ไม่สำเร็จ: ${response.status}`)
-          }
-
-          markdown = await response.text()
+        if (!response.ok) {
+          throw new Error(`โหลดไฟล์ไม่สำเร็จ: ${response.status}`)
         }
+
+        const markdown = await response.text()
 
         if (cancelled) {
           return
@@ -843,102 +567,6 @@ function App() {
     setStatus('กลับไปที่จุดมาร์กเดิมแล้ว')
   }
 
-  async function handleSignIn(event) {
-    event.preventDefault()
-
-    if (!hasSupabaseConfig || !supabase) {
-      setAuthMessage('ต้องตั้งค่า Supabase ก่อนจึงจะเปิดคลังส่วนตัวได้')
-      return
-    }
-
-    const normalizedUsername = loginForm.username.trim().toLowerCase()
-    const email = authAliases[normalizedUsername] ?? loginForm.username.trim()
-    const password = loginForm.password.trim()
-
-    if (!email || !password) {
-      setAuthMessage('กรอกชื่อผู้ใช้และรหัสผ่านก่อน')
-      return
-    }
-
-    setIsAuthBusy(true)
-    setAuthMessage('')
-
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
-
-    if (error) {
-      setAuthMessage(`เข้าสู่ระบบไม่สำเร็จ: ${error.message}`)
-    } else {
-      setLoginForm({ username: '', password: '' })
-      setAuthMessage('เข้าสู่ระบบแล้ว เปิดคลังส่วนตัวได้เลย')
-    }
-
-    setIsAuthBusy(false)
-  }
-
-  async function handleSignOut() {
-    if (!supabase) {
-      return
-    }
-
-    setIsAuthBusy(true)
-    const { error } = await supabase.auth.signOut()
-
-    if (error) {
-      setAuthMessage(`ออกจากระบบไม่สำเร็จ: ${error.message}`)
-    } else {
-      setAuthMessage('ออกจากระบบแล้ว')
-      setLoginForm({ username: '', password: '' })
-    }
-
-    setIsAuthBusy(false)
-  }
-
-  function renderShelfSection(groups, shelfName) {
-    return groups.map((group) => (
-      <section key={`${shelfName}:${group.key}`} className="shelf-group">
-        <div className="shelf-heading">
-          <p className="eyebrow">{shelfName}</p>
-          <h2>{group.label}</h2>
-          <small>{group.docs.length} ไฟล์ในหมวดนี้</small>
-        </div>
-
-        <div className="shelf-books">
-          {group.docs.map((doc) => (
-            <button
-              key={doc.id}
-              type="button"
-              className={`book-card tone-${doc.shelfTone}`}
-              onClick={() => openDoc(doc.id)}
-            >
-              <span className={`book-spine ${doc.sourceType === 'private' ? 'locked' : ''}`}>
-                {doc.sourceType === 'private' ? 'LOCK' : '.md'}
-              </span>
-              <div className="book-content">
-                <p className="book-kicker">{doc.folderLabel}</p>
-                <h2>{doc.title}</h2>
-                <p>{doc.description}</p>
-                <div className="book-progress">
-                  <span>อ่านไปแล้ว {doc.progress}%</span>
-                  <div className="progress-track" aria-hidden="true">
-                    <span style={{ width: `${doc.progress}%` }} />
-                  </div>
-                </div>
-                <div className="book-footer">
-                  <small>
-                    {doc.bookmark?.savedAt
-                      ? `Bookmark ล่าสุด ${doc.bookmark.savedAt}`
-                      : doc.relativePath}
-                  </small>
-                  <strong>{doc.sourceType === 'private' ? 'เปิดแบบส่วนตัว' : 'เปิดอ่าน'}</strong>
-                </div>
-              </div>
-            </button>
-          ))}
-        </div>
-      </section>
-    ))
-  }
-
   return (
     <div className={view === 'library' ? 'app-shell library-shell' : 'app-shell reader-shell'}>
       {view === 'library' ? (
@@ -946,14 +574,12 @@ function App() {
           <section className="library-hero">
             <div className="library-copy">
               <p className="eyebrow">ReadMD Library</p>
-              <h1>ชั้นหนังสือ Markdown ที่แยก public และ private ได้จริง</h1>
+              <h1>คลังหนังสือ Markdown สำหรับเปิดบน iPad แล้วอ่านต่อได้ลื่นกว่าเดิม</h1>
               <p className="library-lede">
-                ชั้น public จะโหลดจาก `public/docs` ตามเดิม ส่วนชั้น private จะดึงจาก
-                Supabase หลังล็อกอินแล้วเท่านั้น ทำให้ไฟล์ลับไม่ต้องอยู่ใน GitHub และไม่
-                หลุดไปกับโปรเจกต์ public ของคุณ
+                เลือกไฟล์จากชั้นหนังสือด้านล่าง แล้วค่อยเข้าโหมดอ่านเต็มหน้าที่มีปุ่มมาร์กลอยและจำจุดอ่านให้เอง
               </p>
               <div className="library-meta">
-                <span>{libraryDocs.length} ไฟล์ที่คุณเห็นได้ตอนนี้</span>
+                <span>{libraryDocs.length} ไฟล์พร้อมอ่าน</span>
                 <span>{status}</span>
               </div>
             </div>
@@ -965,150 +591,60 @@ function App() {
                 <span />
               </div>
               <div className="visual-note">
-                <strong>Public + Private</strong>
-                <p>ของสาธารณะอยู่ใน GitHub ได้ ส่วนของที่ซ่อนต้องแยกไป private bucket</p>
+                <strong>Flow ใหม่</strong>
+                <p>ชั้นหนังสือก่อน แล้วค่อยเข้าสู่ reader ที่มี HUD ลอยตามสายตา</p>
               </div>
             </div>
           </section>
 
-          <section className="auth-panel" aria-label="การเข้าสู่ระบบ">
-            <article className="auth-card">
-              <p className="eyebrow">Private Shelf Access</p>
-              <h2 className="section-heading">ล็อกอินเพื่อเปิดชั้นหนังสือส่วนตัว</h2>
-
-              {!hasSupabaseConfig ? (
-                <>
-                  <p className="auth-copy">
-                    ตอนนี้โปรเจกต์ยังไม่มีไฟล์ `.env` สำหรับ Supabase จึงเปิดได้เฉพาะ public
-                    shelf เท่านั้น
-                  </p>
-                  <p className="auth-hint">
-                    หลังจากตั้งค่าเสร็จ ระบบนี้จะไม่เก็บไฟล์ private ไว้ใน `public/docs`
-                    และคนที่ clone repo ก็จะไม่เห็นไฟล์เหล่านั้น
-                  </p>
-                </>
-              ) : session && profile ? (
-                <>
-                  <p className="auth-copy">
-                    ตอนนี้คุณล็อกอินเป็น <strong>{signedInLabel}</strong> และกำลังใช้สิทธิ์{' '}
-                    <strong>{profile.role === 'admin' ? 'ADMIN' : 'USER'}</strong>
-                  </p>
-                  <p className="auth-hint">
-                    Private shelf จะโชว์เฉพาะไฟล์ที่ role นี้มีสิทธิ์อ่านเท่านั้น
-                  </p>
-                  <button
-                    type="button"
-                    className="auth-button secondary"
-                    onClick={handleSignOut}
-                    disabled={isAuthBusy}
-                  >
-                    ออกจากระบบ
-                  </button>
-                </>
-              ) : (
-                <form className="auth-form" onSubmit={handleSignIn}>
-                  <label>
-                    <span>ชื่อผู้ใช้</span>
-                    <input
-                      type="text"
-                      value={loginForm.username}
-                      onChange={(event) =>
-                        setLoginForm((previous) => ({
-                          ...previous,
-                          username: event.target.value,
-                        }))
-                      }
-                      placeholder="Thirasak หรือ User"
-                      autoComplete="username"
-                    />
-                  </label>
-                  <label>
-                    <span>รหัสผ่าน</span>
-                    <input
-                      type="password"
-                      value={loginForm.password}
-                      onChange={(event) =>
-                        setLoginForm((previous) => ({
-                          ...previous,
-                          password: event.target.value,
-                        }))
-                      }
-                      placeholder="กรอกรหัสผ่านจาก Supabase Auth"
-                      autoComplete="current-password"
-                    />
-                  </label>
-                  <button type="submit" className="auth-button" disabled={isAuthBusy || !authReady}>
-                    {isAuthBusy ? 'กำลังเข้าสู่ระบบ...' : 'เข้าสู่ระบบ'}
-                  </button>
-                </form>
-              )}
-
-              {authMessage ? <p className="auth-message">{authMessage}</p> : null}
-            </article>
-            <article className="auth-card auth-card-secondary">
-              <p className="eyebrow">Security Note</p>
-              <h2 className="section-heading">หลักการที่ทำให้ซ่อนจริง</h2>
-              <ul className="rule-list">
-                <li>ไฟล์ใน `public/docs` ยังเป็น public เหมือนเดิม</li>
-                <li>ไฟล์ private ต้องอยู่ใน Supabase Storage แบบ private bucket เท่านั้น</li>
-                <li>repo GitHub จะเก็บแค่โค้ดหน้าเว็บ ไม่เก็บเอกสาร private</li>
-                <li>คนที่ไม่ได้ล็อกอินหรือไม่มี role ตรง จะไม่เห็นรายชื่อไฟล์ private</li>
-              </ul>
-            </article>
-          </section>
-
           <section className="library-grid" aria-label="ชั้นหนังสือ Markdown">
-            <section className="shelf-group">
-              <div className="shelf-heading">
-                <p className="eyebrow">Public Shelf</p>
-                <h2>คลังสาธารณะ</h2>
-                <small>{publicLibraryDocs.length} ไฟล์</small>
-              </div>
+          {isLoadingLibrary ? (
+            <article className="book-card loading-card">
+              <p>กำลังโหลดรายการหนังสือจากคลัง GitHub...</p>
+            </article>
+          ) : (
+            libraryGroups.map((group) => (
+              <section key={group.key} className="shelf-group">
+                <div className="shelf-heading">
+                  <p className="eyebrow">Shelf</p>
+                  <h2>{group.label}</h2>
+                  <small>{group.docs.length} ไฟล์ในหมวดนี้</small>
+                </div>
 
-              {isLoadingLibrary ? (
-                <article className="book-card loading-card">
-                  <p>กำลังโหลดรายการหนังสือจากคลัง GitHub...</p>
-                </article>
-              ) : (
-                renderShelfSection(publicGroups, 'Public Shelf')
-              )}
-            </section>
-
-            <section className="shelf-group">
-              <div className="shelf-heading">
-                <p className="eyebrow">Private Shelf</p>
-                <h2>คลังส่วนตัว</h2>
-                <small>
-                  {session && profile
-                    ? `${privateLibraryDocs.length} ไฟล์ที่ role นี้อ่านได้`
-                    : 'ต้องล็อกอินก่อน'}
-                </small>
-              </div>
-
-              {!hasSupabaseConfig ? (
-                <article className="book-card loading-card">
-                  <p>ตั้งค่า Supabase ก่อน แล้วชั้น private จะเริ่มทำงาน</p>
-                </article>
-              ) : !authReady ? (
-                <article className="book-card loading-card">
-                  <p>กำลังตรวจสถานะการเข้าสู่ระบบ...</p>
-                </article>
-              ) : !session ? (
-                <article className="book-card loading-card">
-                  <p>ล็อกอินก่อน แล้วระบบจะดึงเฉพาะเอกสาร private ที่คุณมีสิทธิ์เห็น</p>
-                </article>
-              ) : isLoadingPrivateDocs ? (
-                <article className="book-card loading-card">
-                  <p>กำลังโหลดคลังส่วนตัวจาก Supabase...</p>
-                </article>
-              ) : privateGroups.length === 0 ? (
-                <article className="book-card loading-card">
-                  <p>role นี้ยังไม่มีเอกสาร private หรือยังไม่ได้เพิ่มข้อมูลในตาราง private_documents</p>
-                </article>
-              ) : (
-                renderShelfSection(privateGroups, 'Private Shelf')
-              )}
-            </section>
+                <div className="shelf-books">
+                  {group.docs.map((doc) => (
+                    <button
+                      key={doc.id}
+                      type="button"
+                      className={`book-card tone-${doc.shelfTone}`}
+                      onClick={() => openDoc(doc.id)}
+                    >
+                      <span className="book-spine">.md</span>
+                      <div className="book-content">
+                        <p className="book-kicker">{doc.folderLabel}</p>
+                        <h2>{doc.title}</h2>
+                        <p>{doc.description}</p>
+                        <div className="book-progress">
+                          <span>อ่านไปแล้ว {doc.progress}%</span>
+                          <div className="progress-track" aria-hidden="true">
+                            <span style={{ width: `${doc.progress}%` }} />
+                          </div>
+                        </div>
+                        <div className="book-footer">
+                          <small>
+                            {doc.bookmark?.savedAt
+                              ? `Bookmark ล่าสุด ${doc.bookmark.savedAt}`
+                              : doc.relativePath}
+                          </small>
+                          <strong>เปิดอ่าน</strong>
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            ))
+          )}
           </section>
         </main>
       ) : (
@@ -1118,17 +654,12 @@ function App() {
               กลับไปชั้นหนังสือ
             </button>
             <div className="reader-title">
-              <p className="eyebrow">
-                {activeDoc?.sourceType === 'private' ? 'Private Reading' : 'Now Reading'}
-              </p>
+              <p className="eyebrow">Now Reading</p>
               <h1>{activeDoc?.title ?? 'กำลังเปิดไฟล์'}</h1>
-              <p className="reader-subtitle">{activeDoc?.folderLabel ?? 'กำลังเตรียมเอกสาร'}</p>
             </div>
             <div className="reader-chip">
               <span>{savedProgress}%</span>
-              <small>
-                {activeDoc?.sourceType === 'private' ? 'อ่านจากคลังส่วนตัว' : 'อ่านถึงตรงนี้แล้ว'}
-              </small>
+              <small>อ่านถึงตรงนี้แล้ว</small>
             </div>
           </header>
 
@@ -1146,8 +677,7 @@ function App() {
             <div className="hud-card bookmark-card">
               <p className="hud-label">จุดมาร์ก</p>
               <p className="hud-excerpt">
-                {bookmark?.excerpt ??
-                  'ยังไม่มีจุดมาร์กสำหรับไฟล์นี้ กดปุ่มด้านล่างเมื่อถึงช่วงที่อยากกลับมาอ่าน'}
+                {bookmark?.excerpt ?? 'ยังไม่มีจุดมาร์กสำหรับไฟล์นี้ กดปุ่มด้านล่างเมื่อถึงช่วงที่อยากกลับมาอ่าน'}
               </p>
               <p className="hud-meta">
                 {bookmark?.savedAt ? `${bookmark.savedAt} · ${bookmark.progress}%` : 'ยังไม่ได้บันทึก'}
