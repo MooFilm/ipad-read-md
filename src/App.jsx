@@ -665,19 +665,6 @@ function App() {
               <p className="hud-meta">
                 {bookmark?.savedAt ? `${bookmark.savedAt} · ${bookmark.progress}%` : 'ยังไม่ได้บันทึก'}
               </p>
-              <div className="floating-actions">
-                <button type="button" onClick={handleSaveBookmark}>
-                  มาร์กตรงนี้
-                </button>
-                <button
-                  type="button"
-                  className="ghost-button"
-                  onClick={handleJumpToBookmark}
-                  disabled={!bookmark}
-                >
-                  กลับไปจุดมาร์ก
-                </button>
-              </div>
             </div>
           </aside>
 
@@ -688,6 +675,32 @@ function App() {
               </ReactMarkdown>
             </article>
           </section>
+
+          <div className="reader-dock">
+            <div className="reader-dock-copy">
+              <p className="hud-label">จุดมาร์กลอย</p>
+              <strong>{bookmark?.heading ?? currentPassage.heading}</strong>
+              <small>
+                {bookmark?.excerpt
+                  ? trimText(bookmark.excerpt, 88)
+                  : 'กดมาร์กตอนถึงย่อหน้าที่อยากกลับมาอ่าน แล้วปุ่มนี้จะตามคุณไปตลอด'}
+              </small>
+            </div>
+
+            <div className="floating-actions">
+              <button type="button" onClick={handleSaveBookmark}>
+                มาร์กตรงนี้
+              </button>
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={handleJumpToBookmark}
+                disabled={!bookmark}
+              >
+                กลับไปจุดมาร์ก
+              </button>
+            </div>
+          </div>
         </main>
       )}
     </div>
