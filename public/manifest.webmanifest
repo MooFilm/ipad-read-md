@@ -1,0 +1,16 @@
+{
+  "name": "ReadMD on iPad",
+  "short_name": "ReadMD",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f6f0e8",
+  "theme_color": "#e5dccf",
+  "icons": [
+    {
+      "src": "/readmd-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

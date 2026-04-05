@@ -1,0 +1,219 @@
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Manrope:wght@400;500;600;700&display=swap');
+
+:root {
+  color-scheme: light;
+  --bg: #f6f0e8;
+  --bg-soft: #efe6d8;
+  --ink: #1f1c18;
+  --muted: #6b6259;
+  --line: rgba(31, 28, 24, 0.12);
+  --accent: #b5542f;
+  --accent-soft: rgba(181, 84, 47, 0.12);
+  --panel: rgba(255, 252, 247, 0.72);
+  --shadow: 0 20px 60px rgba(73, 52, 31, 0.12);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: 'Manrope', sans-serif;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.92), transparent 35%),
+    linear-gradient(135deg, #efe3d1 0%, #f8f4ee 45%, #efe8dc 100%);
+}
+
+button {
+  font: inherit;
+}
+
+.app-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) 1fr;
+}
+
+.sidebar {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  padding: 3rem 2rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 2rem;
+  background: linear-gradient(180deg, rgba(255, 250, 244, 0.88), rgba(245, 236, 224, 0.76));
+  border-right: 1px solid var(--line);
+  backdrop-filter: blur(16px);
+}
+
+.eyebrow {
+  margin: 0 0 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  font-size: 0.76rem;
+  color: var(--accent);
+}
+
+.sidebar h1 {
+  margin: 0;
+  max-width: 12ch;
+  font-family: 'Fraunces', serif;
+  font-size: clamp(2.3rem, 4vw, 4.8rem);
+  line-height: 0.98;
+}
+
+.lede {
+  max-width: 34ch;
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.doc-list {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.doc-button,
+.actions button {
+  padding: 0.95rem 1rem;
+  border-radius: 18px;
+  border: 1px solid transparent;
+  transition:
+    transform 180ms ease,
+    border-color 180ms ease,
+    background-color 180ms ease;
+}
+
+.doc-button {
+  text-align: left;
+  background: transparent;
+  border-color: var(--line);
+}
+
+.doc-button span,
+.doc-button small {
+  display: block;
+}
+
+.doc-button span {
+  font-weight: 700;
+}
+
+.doc-button small,
+.meta {
+  color: var(--muted);
+}
+
+.doc-button.active {
+  background: rgba(255, 252, 247, 0.85);
+  border-color: rgba(181, 84, 47, 0.28);
+  box-shadow: var(--shadow);
+}
+
+.doc-button:hover,
+.actions button:hover {
+  transform: translateY(-2px);
+}
+
+.panel {
+  padding: 1.2rem;
+  border-radius: 24px;
+  background: var(--panel);
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  box-shadow: var(--shadow);
+}
+
+.progress-bar {
+  width: 100%;
+  height: 10px;
+  margin: 0.75rem 0 1rem;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(31, 28, 24, 0.08);
+}
+
+.progress-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #cb6f49 0%, #a9441d 100%);
+}
+
+.actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+
+.actions button {
+  background: var(--accent);
+  color: white;
+  border: none;
+}
+
+.actions .ghost {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.reader {
+  padding: 7vh min(7vw, 72px);
+}
+
+.markdown-body {
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 3rem min(4vw, 3rem);
+  background: rgba(255, 252, 248, 0.74);
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  border-radius: 32px;
+  box-shadow: var(--shadow);
+  line-height: 1.9;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3 {
+  font-family: 'Fraunces', serif;
+  line-height: 1.1;
+}
+
+.markdown-body img {
+  max-width: 100%;
+}
+
+.markdown-body code {
+  padding: 0.15rem 0.35rem;
+  border-radius: 0.4rem;
+  background: rgba(31, 28, 24, 0.08);
+}
+
+@media (max-width: 960px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    position: relative;
+    height: auto;
+    padding: 1.5rem;
+  }
+
+  .reader {
+    padding: 1rem;
+  }
+
+  .markdown-body {
+    border-radius: 24px;
+    padding: 1.35rem;
+  }
+}
