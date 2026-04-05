@@ -192,6 +192,8 @@ function App() {
   const scrollFrameRef = useRef(null)
   const pendingRestoreRef = useRef(null)
   const currentPassageRef = useRef(emptyPassage)
+  const savedProgressRef = useRef(0)
+  const lastScrollSampleRef = useRef(0)
 
   const activeDoc = useMemo(
     () => docs.find((doc) => doc.id === activeDocId) ?? null,
@@ -248,6 +250,10 @@ function App() {
   useEffect(() => {
     currentPassageRef.current = currentPassage
   }, [currentPassage])
+
+  useEffect(() => {
+    savedProgressRef.current = savedProgress
+  }, [savedProgress])
 
   useEffect(() => {
     let cancelled = false
@@ -404,13 +410,24 @@ function App() {
       return undefined
     }
 
-    const updateReaderState = () => {
+    const updateReaderState = (force = false) => {
       scrollFrameRef.current = null
+      const now = window.performance.now()
+
+      if (!force && now - lastScrollSampleRef.current < 80) {
+        return
+      }
+
+      lastScrollSampleRef.current = now
 
       const progress = getReadingProgress()
       const nextPassage = detectCurrentPassage(articleRef.current)
 
-      setSavedProgress(progress)
+      if (progress !== savedProgressRef.current) {
+        savedProgressRef.current = progress
+        setSavedProgress(progress)
+      }
+
       setCurrentPassage((previous) =>
         previous.index === nextPassage.index &&
         previous.excerpt === nextPassage.excerpt &&
@@ -433,11 +450,11 @@ function App() {
         return
       }
 
-      scrollFrameRef.current = window.requestAnimationFrame(updateReaderState)
+      scrollFrameRef.current = window.requestAnimationFrame(() => updateReaderState(false))
     }
 
     window.addEventListener('scroll', handleScroll, { passive: true })
-    handleScroll()
+    updateReaderState(true)
 
     return () => {
       window.removeEventListener('scroll', handleScroll)
