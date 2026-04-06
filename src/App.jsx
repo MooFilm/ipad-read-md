@@ -1,88 +1,67 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
+import {
+  defaultPrefs,
+  deleteBook,
+  deleteFolder,
+  getLibrarySnapshot,
+  putBook,
+  putBooks,
+  putFolder,
+  putPrefs,
+  replaceLibrary,
+} from './libraryStore'
 
-const fallbackDocs = [
-  {
-    id: 'welcome',
-    title: 'Welcome Guide',
-    description: 'คู่มือทดลองระบบอ่านต่อและมาร์กจุดสำคัญ',
-    folderPath: '',
-    folderLabel: 'เริ่มต้นใช้งาน',
-    relativePath: 'welcome.md',
-    path: 'docs/welcome.md',
-  },
-]
-
-const passageSelector = 'h1, h2, h3, h4, p, li, blockquote, pre'
-const emptyPassage = {
+const DEFAULT_FOLDER_ID = 'folder-inbox'
+const PASSAGE_SELECTOR = 'h1, h2, h3, h4, p, li, blockquote, pre'
+const EMPTY_PASSAGE = {
   index: 0,
   heading: 'พร้อมอ่าน',
-  excerpt: 'เลื่อนลงไปเรื่อย ๆ แล้วระบบจะตามตำแหน่งที่คุณอ่านอยู่ให้',
+  excerpt: 'เริ่มเลื่อนอ่าน แล้วระบบจะจำตำแหน่งล่าสุดและช่วยคุณกลับมาจุดเดิมได้',
 }
 
-const progressKey = (docId) => `readmd-progress:${docId}`
-const bookmarkKey = (docId) => `readmd-bookmark:${docId}`
-const publicUrl = (path) => `${import.meta.env.BASE_URL}${path.replace(/^\/+/, '')}`
-const configuredBranch = 'main'
-
-function inferGitHubRepo() {
-  if (typeof window === 'undefined') {
-    return null
-  }
-
-  const { hostname, pathname } = window.location
-
-  if (!hostname.endsWith('github.io')) {
-    return null
-  }
-
-  const owner = hostname.replace('.github.io', '')
-  const [repo] = pathname.split('/').filter(Boolean)
-
-  if (!owner || !repo) {
-    return null
-  }
-
-  return { owner, repo, branch: configuredBranch }
+function createId(prefix) {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 }
 
-function fileNameToTitle(name) {
-  return name
-    .replace(/\.md$/i, '')
-    .replace(/[-_]+/g, ' ')
-    .replace(/\b\w/g, (char) => char.toUpperCase())
-}
-
-function folderPathToLabel(folderPath) {
-  if (!folderPath) {
-    return 'เริ่มต้นใช้งาน'
-  }
-
-  return folderPath
-    .split('/')
-    .map((segment) => fileNameToTitle(segment))
-    .join(' / ')
-}
-
-function buildDocRecord({ id, title, description, relativePath, sourcePath, rawUrl }) {
-  const normalizedPath = relativePath.replace(/^docs\//, '')
-  const segments = normalizedPath.split('/')
-  const fileName = segments.at(-1) ?? normalizedPath
-  const folderPath = segments.slice(0, -1).join('/')
-
+function createDefaultFolder() {
   return {
-    id,
-    title,
-    description,
-    folderPath,
-    folderLabel: folderPathToLabel(folderPath),
-    relativePath: normalizedPath,
-    fileName,
-    path: rawUrl ?? sourcePath,
+    id: DEFAULT_FOLDER_ID,
+    name: 'ยังไม่จัดหมวด',
+    parentId: null,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    fixed: true,
   }
 }
 
-function trimText(text, maxLength = 140) {
+function stripExtension(name) {
+  return name.replace(/\.(md|markdown|txt)$/i, '')
+}
+
+function formatDate(timestamp) {
+  if (!timestamp) {
+    return 'ยังไม่เคยเปิดอ่าน'
+  }
+
+  return new Intl.DateTimeFormat('th-TH', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(new Date(timestamp))
+}
+
+function formatCompactDate(timestamp) {
+  if (!timestamp) {
+    return '—'
+  }
+
+  return new Intl.DateTimeFormat('th-TH', {
+    day: 'numeric',
+    month: 'short',
+  }).format(new Date(timestamp))
+}
+
+function trimText(text, maxLength = 120) {
   const normalized = (text ?? '').replace(/\s+/g, ' ').trim()
 
   if (!normalized) {
@@ -94,39 +73,13 @@ function trimText(text, maxLength = 140) {
     : `${normalized.slice(0, maxLength).trimEnd()}...`
 }
 
-function readStoredProgress(docId) {
-  if (typeof window === 'undefined') {
-    return 0
-  }
-
-  return Number(localStorage.getItem(progressKey(docId)) ?? 0)
-}
-
-function readStoredBookmark(docId) {
-  if (typeof window === 'undefined') {
-    return null
-  }
-
-  const raw = localStorage.getItem(bookmarkKey(docId))
-
-  if (!raw) {
-    return null
-  }
-
-  try {
-    return JSON.parse(raw)
-  } catch {
-    return null
-  }
-}
-
 function getPassageNodes(article) {
   if (!article) {
     return []
   }
 
-  return [...article.querySelectorAll(passageSelector)].filter((node) =>
-    trimText(node.textContent, 20),
+  return [...article.querySelectorAll(PASSAGE_SELECTOR)].filter((node) =>
+    trimText(node.textContent, 24),
   )
 }
 
@@ -135,7 +88,7 @@ function getPassageSnapshot(article, index) {
   const target = nodes[index] ?? nodes[0]
 
   if (!target) {
-    return emptyPassage
+    return EMPTY_PASSAGE
   }
 
   let heading = ''
@@ -156,14 +109,15 @@ function getPassageSnapshot(article, index) {
   }
 }
 
-function detectCurrentPassage(article) {
+function detectCurrentPassage(article, scrollContainer) {
   const nodes = getPassageNodes(article)
 
-  if (nodes.length === 0) {
-    return emptyPassage
+  if (!nodes.length || !scrollContainer) {
+    return EMPTY_PASSAGE
   }
 
-  const pivot = window.innerHeight * 0.28
+  const containerRect = scrollContainer.getBoundingClientRect()
+  const pivot = containerRect.top + scrollContainer.clientHeight * 0.28
   let activeIndex = 0
 
   nodes.forEach((node, index) => {
@@ -175,274 +129,264 @@ function detectCurrentPassage(article) {
   return getPassageSnapshot(article, activeIndex)
 }
 
+function flattenFolders(folders, parentId = null, depth = 0) {
+  return folders
+    .filter((folder) => folder.parentId === parentId)
+    .sort((left, right) => left.name.localeCompare(right.name, 'th'))
+    .flatMap((folder) => [
+      { ...folder, depth },
+      ...flattenFolders(folders, folder.id, depth + 1),
+    ])
+}
+
+function buildBreadcrumb(currentFolder, folderMap) {
+  if (!currentFolder) {
+    return []
+  }
+
+  const chain = []
+  let pointer = currentFolder
+
+  while (pointer) {
+    chain.unshift(pointer)
+    pointer = pointer.parentId ? folderMap.get(pointer.parentId) : null
+  }
+
+  return chain
+}
+
+function sortBooks(items, sortBy) {
+  const books = [...items]
+
+  if (sortBy === 'title') {
+    return books.sort((left, right) => left.title.localeCompare(right.title, 'th'))
+  }
+
+  if (sortBy === 'progress') {
+    return books.sort((left, right) => (right.progress ?? 0) - (left.progress ?? 0))
+  }
+
+  return books.sort((left, right) => (right.lastOpenedAt ?? 0) - (left.lastOpenedAt ?? 0))
+}
+
+function extractLead(content) {
+  const firstText = trimText(
+    content
+      .replace(/^#+\s+/gm, '')
+      .replace(/`{3}[\s\S]*?`{3}/g, '')
+      .replace(/[*_>#-]/g, ' '),
+    140,
+  )
+
+  return firstText || 'หนังสือส่วนตัวพร้อมเปิดอ่านบน iPad'
+}
+
+function fileListToArray(fileList) {
+  return Array.from(fileList ?? []).filter((file) => /\.(md|markdown|txt)$/i.test(file.name))
+}
+
 function App() {
-  const [docs, setDocs] = useState(fallbackDocs)
+  const [folders, setFolders] = useState([])
+  const [books, setBooks] = useState([])
+  const [prefs, setPrefs] = useState(defaultPrefs)
+  const [storageMode, setStorageMode] = useState('indexedDB')
   const [view, setView] = useState('library')
-  const [activeDocId, setActiveDocId] = useState(null)
-  const [content, setContent] = useState('')
-  const [savedProgress, setSavedProgress] = useState(0)
-  const [bookmark, setBookmark] = useState(null)
-  const [status, setStatus] = useState('เลือกไฟล์ที่อยากอ่านได้เลย')
-  const [currentPassage, setCurrentPassage] = useState(emptyPassage)
-  const [isLoadingLibrary, setIsLoadingLibrary] = useState(true)
-  const [isLoadingContent, setIsLoadingContent] = useState(false)
-  const [libraryRefreshToken, setLibraryRefreshToken] = useState(0)
+  const [currentFolderId, setCurrentFolderId] = useState(DEFAULT_FOLDER_ID)
+  const [activeBookId, setActiveBookId] = useState(null)
+  const [status, setStatus] = useState('พร้อมเพิ่มหนังสือและจัดชั้นอ่านส่วนตัวของคุณ')
+  const [isBooting, setIsBooting] = useState(true)
+  const [isImporting, setIsImporting] = useState(false)
+  const [folderDraft, setFolderDraft] = useState('')
+  const [folderEditor, setFolderEditor] = useState({ open: false, mode: 'create', targetId: null })
+  const [bookActionId, setBookActionId] = useState(null)
+  const [bookMoveId, setBookMoveId] = useState(null)
+  const [bookmarkPanelOpen, setBookmarkPanelOpen] = useState(false)
+  const [readerPassage, setReaderPassage] = useState(EMPTY_PASSAGE)
+  const [readerProgress, setReaderProgress] = useState(0)
+  const [toastMessage, setToastMessage] = useState('')
+  const fileInputRef = useRef(null)
+  const backupInputRef = useRef(null)
+  const readerScrollRef = useRef(null)
   const articleRef = useRef(null)
   const saveTimerRef = useRef(null)
   const scrollFrameRef = useRef(null)
-  const pendingRestoreRef = useRef(null)
-  const currentPassageRef = useRef(emptyPassage)
-  const savedProgressRef = useRef(0)
   const lastScrollSampleRef = useRef(0)
+  const toastTimerRef = useRef(null)
 
-  const activeDoc = useMemo(
-    () => docs.find((doc) => doc.id === activeDocId) ?? null,
-    [docs, activeDocId],
+  const folderMap = useMemo(
+    () => new Map(folders.map((folder) => [folder.id, folder])),
+    [folders],
   )
 
-  const libraryDocs = useMemo(
+  const activeBook = useMemo(
+    () => books.find((book) => book.id === activeBookId) ?? null,
+    [books, activeBookId],
+  )
+
+  const currentFolder = useMemo(
+    () => folders.find((folder) => folder.id === currentFolderId) ?? null,
+    [folders, currentFolderId],
+  )
+
+  const breadcrumb = useMemo(
+    () => buildBreadcrumb(currentFolder, folderMap),
+    [currentFolder, folderMap],
+  )
+
+  const folderTree = useMemo(() => flattenFolders(folders), [folders])
+
+  const childFolders = useMemo(
     () =>
-      docs.map((doc, index) => ({
-        ...doc,
-        progress: readStoredProgress(doc.id),
-        bookmark: readStoredBookmark(doc.id),
-        shelfTone: index % 4,
-      })),
-    [docs, libraryRefreshToken],
+      folders
+        .filter((folder) => folder.parentId === currentFolderId)
+        .sort((left, right) => left.name.localeCompare(right.name, 'th')),
+    [folders, currentFolderId],
   )
 
-  const libraryGroups = useMemo(() => {
-    const groups = new Map()
+  const folderBooks = useMemo(() => {
+    const filtered = books.filter((book) => book.folderId === currentFolderId)
+    return sortBooks(filtered, prefs.sortBy)
+  }, [books, currentFolderId, prefs.sortBy])
 
-    libraryDocs.forEach((doc) => {
-      const key = doc.folderPath || '__root__'
+  const recentBooks = useMemo(
+    () =>
+      [...books]
+        .filter((book) => book.lastOpenedAt)
+        .sort((left, right) => (right.lastOpenedAt ?? 0) - (left.lastOpenedAt ?? 0))
+        .slice(0, 6),
+    [books],
+  )
 
-      if (!groups.has(key)) {
-        groups.set(key, {
-          key,
-          folderPath: doc.folderPath,
-          label: doc.folderLabel,
-          docs: [],
-        })
-      }
+  const stats = useMemo(() => {
+    const totalBooks = books.length
+    const readingBooks = books.filter((book) => (book.progress ?? 0) > 0 && (book.progress ?? 0) < 98).length
+    const finishedBooks = books.filter((book) => (book.progress ?? 0) >= 98).length
+    const avgProgress = totalBooks
+      ? Math.round(books.reduce((sum, book) => sum + (book.progress ?? 0), 0) / totalBooks)
+      : 0
 
-      groups.get(key).docs.push(doc)
-    })
-
-    return [...groups.values()]
-      .map((group) => ({
-        ...group,
-        docs: group.docs.sort((left, right) => left.title.localeCompare(right.title)),
-      }))
-      .sort((left, right) => {
-        if (left.folderPath === '' && right.folderPath !== '') {
-          return -1
-        }
-
-        if (left.folderPath !== '' && right.folderPath === '') {
-          return 1
-        }
-
-        return left.label.localeCompare(right.label)
-      })
-  }, [libraryDocs])
+    return {
+      totalBooks,
+      readingBooks,
+      finishedBooks,
+      avgProgress,
+      totalFolders: folders.length,
+    }
+  }, [books, folders.length])
 
   useEffect(() => {
-    currentPassageRef.current = currentPassage
-  }, [currentPassage])
+    let active = true
 
-  useEffect(() => {
-    savedProgressRef.current = savedProgress
-  }, [savedProgress])
+    async function bootstrap() {
+      setIsBooting(true)
 
-  useEffect(() => {
-    let cancelled = false
+      const snapshot = await getLibrarySnapshot()
 
-    async function loadLibrary() {
-      setIsLoadingLibrary(true)
-      const repoInfo = inferGitHubRepo()
-
-      if (!repoInfo) {
-        if (!cancelled) {
-          setDocs(fallbackDocs)
-          setStatus('พร้อมอ่านจากเอกสารในเครื่องและไฟล์ตัวอย่าง')
-          setIsLoadingLibrary(false)
-        }
+      if (!active) {
         return
       }
 
-      try {
-        const response = await fetch(
-          `https://api.github.com/repos/${repoInfo.owner}/${repoInfo.repo}/git/trees/${repoInfo.branch}?recursive=1`,
-        )
+      let nextFolders = snapshot.folders
+      let nextBooks = snapshot.books
 
-        if (!response.ok) {
-          throw new Error(`โหลดรายการเอกสารไม่สำเร็จ: ${response.status}`)
-        }
+      if (!nextFolders.length) {
+        const inbox = createDefaultFolder()
+        nextFolders = [inbox]
+        await putFolder(inbox)
+      }
 
-        const payload = await response.json()
-        const markdownDocs = (payload.tree ?? [])
-          .filter(
-            (item) =>
-              item.type === 'blob' &&
-              item.path.startsWith('public/docs/') &&
-              /\.md$/i.test(item.path),
-          )
-          .map((item) => {
-            const relativePath = item.path.replace(/^public\/docs\//, '')
+      if (!nextBooks.length) {
+        try {
+          const response = await fetch(`${import.meta.env.BASE_URL}docs/welcome.md`)
 
-            return buildDocRecord({
-              id: relativePath.toLowerCase(),
-              title: fileNameToTitle(relativePath.split('/').at(-1) ?? relativePath),
-              description: 'เปิดอ่านจากคลัง Markdown ใน GitHub ของคุณ',
-              relativePath,
-              sourcePath: `docs/${relativePath}`,
-              rawUrl: `https://raw.githubusercontent.com/${repoInfo.owner}/${repoInfo.repo}/${repoInfo.branch}/${item.path}`,
-            })
-          })
-          .sort((left, right) => left.title.localeCompare(right.title))
+          if (response.ok) {
+            const content = await response.text()
+            const seedBook = {
+              id: createId('book'),
+              title: 'Welcome Guide',
+              fileName: 'welcome.md',
+              folderId: DEFAULT_FOLDER_ID,
+              content,
+              excerpt: extractLead(content),
+              createdAt: Date.now(),
+              updatedAt: Date.now(),
+              lastOpenedAt: null,
+              lastReadAt: null,
+              progress: 0,
+              readerFontSize: snapshot.prefs.fontSize ?? defaultPrefs.fontSize,
+              bookmarks: [],
+            }
 
-        if (!cancelled) {
-          setDocs(markdownDocs.length > 0 ? markdownDocs : fallbackDocs)
-          setStatus('เลือกเอกสารจากชั้นหนังสือแล้วเริ่มอ่านต่อได้ทันที')
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setDocs(fallbackDocs)
-          setStatus(`ใช้รายการสำรองแทน: ${String(error.message ?? error)}`)
-        }
-      } finally {
-        if (!cancelled) {
-          setIsLoadingLibrary(false)
+            nextBooks = [seedBook]
+            await putBook(seedBook)
+          }
+        } catch {
+          nextBooks = []
         }
       }
+
+      setFolders(nextFolders)
+      setBooks(nextBooks)
+      setPrefs({ ...defaultPrefs, ...snapshot.prefs })
+      setStorageMode(snapshot.storageMode)
+      setCurrentFolderId(
+        nextFolders.find((folder) => folder.id === DEFAULT_FOLDER_ID)?.id ?? nextFolders[0]?.id ?? DEFAULT_FOLDER_ID,
+      )
+      setIsBooting(false)
     }
 
-    loadLibrary()
+    bootstrap()
 
     return () => {
-      cancelled = true
+      active = false
     }
   }, [])
 
   useEffect(() => {
-    if (view !== 'reader' || !activeDoc) {
+    if (toastTimerRef.current) {
+      window.clearTimeout(toastTimerRef.current)
+    }
+
+    if (!toastMessage) {
       return
     }
 
-    let cancelled = false
-
-    async function loadMarkdown() {
-      try {
-        setIsLoadingContent(true)
-        setStatus('กำลังเปิดไฟล์...')
-        setCurrentPassage(emptyPassage)
-        setContent('')
-        window.scrollTo({ top: 0, behavior: 'auto' })
-
-        const source = activeDoc.path.startsWith('http')
-          ? activeDoc.path
-          : publicUrl(activeDoc.path)
-        const response = await fetch(source)
-
-        if (!response.ok) {
-          throw new Error(`โหลดไฟล์ไม่สำเร็จ: ${response.status}`)
-        }
-
-        const markdown = await response.text()
-
-        if (cancelled) {
-          return
-        }
-
-        const storedProgress = readStoredProgress(activeDoc.id)
-        const storedBookmark = readStoredBookmark(activeDoc.id)
-
-        pendingRestoreRef.current = storedProgress
-        setContent(markdown)
-        setSavedProgress(storedProgress)
-        setBookmark(storedBookmark)
-        setStatus('พร้อมอ่าน')
-      } catch (error) {
-        if (cancelled) {
-          return
-        }
-
-        setContent(`# โหลดไฟล์ไม่ได้\n\n${String(error.message ?? error)}`)
-        setSavedProgress(0)
-        setBookmark(null)
-        setStatus('เกิดปัญหาในการโหลดไฟล์')
-      } finally {
-        if (!cancelled) {
-          setIsLoadingContent(false)
-        }
-      }
-    }
-
-    loadMarkdown()
+    toastTimerRef.current = window.setTimeout(() => setToastMessage(''), 2400)
 
     return () => {
-      cancelled = true
+      if (toastTimerRef.current) {
+        window.clearTimeout(toastTimerRef.current)
+      }
     }
-  }, [view, activeDoc])
+  }, [toastMessage])
 
   useEffect(() => {
-    if (view !== 'reader' || !content) {
+    if (!activeBook || view !== 'reader') {
       return
     }
 
+    setReaderProgress(activeBook.progress ?? 0)
+    setReaderPassage(EMPTY_PASSAGE)
+    setBookmarkPanelOpen(false)
+
     const frame = requestAnimationFrame(() => {
-      const pendingProgress = pendingRestoreRef.current
+      const scroller = readerScrollRef.current
 
-      if (typeof pendingProgress === 'number') {
-        restoreProgress(pendingProgress, false)
-        pendingRestoreRef.current = null
-      }
-
-      setCurrentPassage(detectCurrentPassage(articleRef.current))
-    })
-
-    return () => cancelAnimationFrame(frame)
-  }, [view, content])
-
-  useEffect(() => {
-    if (view !== 'reader' || !activeDoc || !content) {
-      return undefined
-    }
-
-    const updateReaderState = (force = false) => {
-      scrollFrameRef.current = null
-      const now = window.performance.now()
-
-      if (!force && now - lastScrollSampleRef.current < 80) {
+      if (!scroller) {
         return
       }
 
-      lastScrollSampleRef.current = now
+      const max = Math.max(scroller.scrollHeight - scroller.clientHeight, 1)
+      scroller.scrollTop = ((activeBook.progress ?? 0) / 100) * max
+      setReaderPassage(detectCurrentPassage(articleRef.current, scroller))
+    })
 
-      const progress = getReadingProgress()
-      const nextPassage = detectCurrentPassage(articleRef.current)
+    return () => cancelAnimationFrame(frame)
+  }, [activeBook, view])
 
-      if (progress !== savedProgressRef.current) {
-        savedProgressRef.current = progress
-        setSavedProgress(progress)
-      }
-
-      setCurrentPassage((previous) =>
-        previous.index === nextPassage.index &&
-        previous.excerpt === nextPassage.excerpt &&
-        previous.heading === nextPassage.heading
-          ? previous
-          : nextPassage,
-      )
-
-      if (saveTimerRef.current) {
-        window.clearTimeout(saveTimerRef.current)
-      }
-
-      saveTimerRef.current = window.setTimeout(() => {
-        localStorage.setItem(progressKey(activeDoc.id), String(progress))
-      }, 120)
+  useEffect(() => {
+    if (view !== 'reader' || !activeBook) {
+      return undefined
     }
 
     const handleScroll = () => {
@@ -450,14 +394,53 @@ function App() {
         return
       }
 
-      scrollFrameRef.current = window.requestAnimationFrame(() => updateReaderState(false))
+      scrollFrameRef.current = window.requestAnimationFrame(() => {
+        scrollFrameRef.current = null
+
+        const scroller = readerScrollRef.current
+
+        if (!scroller) {
+          return
+        }
+
+        const now = window.performance.now()
+
+        if (now - lastScrollSampleRef.current < 72) {
+          return
+        }
+
+        lastScrollSampleRef.current = now
+
+        const max = Math.max(scroller.scrollHeight - scroller.clientHeight, 1)
+        const progress = Math.round((scroller.scrollTop / max) * 100)
+        const passage = detectCurrentPassage(articleRef.current, scroller)
+
+        setReaderProgress(progress)
+        setReaderPassage(passage)
+
+        if (saveTimerRef.current) {
+          window.clearTimeout(saveTimerRef.current)
+        }
+
+        saveTimerRef.current = window.setTimeout(() => {
+          updateBook(activeBook.id, {
+            progress,
+            lastReadAt: Date.now(),
+          })
+        }, 220)
+      })
     }
 
-    window.addEventListener('scroll', handleScroll, { passive: true })
-    updateReaderState(true)
+    const scroller = readerScrollRef.current
+
+    if (!scroller) {
+      return undefined
+    }
+
+    scroller.addEventListener('scroll', handleScroll, { passive: true })
 
     return () => {
-      window.removeEventListener('scroll', handleScroll)
+      scroller.removeEventListener('scroll', handleScroll)
 
       if (scrollFrameRef.current) {
         window.cancelAnimationFrame(scrollFrameRef.current)
@@ -467,259 +450,775 @@ function App() {
         window.clearTimeout(saveTimerRef.current)
       }
     }
-  }, [view, activeDoc, content])
+  }, [view, activeBook])
 
-  function getReadingProgress() {
-    const article = articleRef.current
-
-    if (!article) {
-      return 0
-    }
-
-    const articleTop = article.offsetTop
-    const articleHeight = article.offsetHeight
-    const viewportHeight = window.innerHeight
-    const scrollable = Math.max(articleHeight - viewportHeight, 1)
-    const current = Math.min(Math.max(window.scrollY - articleTop, 0), scrollable)
-
-    return Math.round((current / scrollable) * 100)
+  async function syncPrefs(nextPrefs) {
+    setPrefs(nextPrefs)
+    await putPrefs(nextPrefs)
   }
 
-  function restoreProgress(progress, smooth) {
-    const article = articleRef.current
+  async function syncFolders(nextFolders) {
+    setFolders(nextFolders)
+  }
 
-    if (!article) {
+  async function syncBooks(nextBooks) {
+    setBooks(nextBooks)
+  }
+
+  async function updateBook(bookId, patch) {
+    setBooks((previous) => {
+      const nextBooks = previous.map((book) =>
+        book.id === bookId
+          ? {
+              ...book,
+              ...patch,
+              updatedAt: Date.now(),
+            }
+          : book,
+      )
+
+      const changedBook = nextBooks.find((book) => book.id === bookId)
+
+      if (changedBook) {
+        void putBook(changedBook)
+      }
+
+      return nextBooks
+    })
+  }
+
+  function showToast(message) {
+    setToastMessage(message)
+  }
+
+  async function handleImportFiles(event) {
+    const files = fileListToArray(event.target.files)
+
+    if (!files.length) {
       return
     }
 
-    const articleTop = article.offsetTop
-    const articleHeight = article.offsetHeight
-    const viewportHeight = window.innerHeight
-    const scrollable = Math.max(articleHeight - viewportHeight, 1)
-    const target = Math.max(articleTop + (scrollable * progress) / 100 - 108, 0)
+    setIsImporting(true)
+    const targetFolderId = currentFolderId || DEFAULT_FOLDER_ID
 
-    window.scrollTo({ top: target, behavior: smooth ? 'smooth' : 'auto' })
-  }
+    const incomingBooks = await Promise.all(
+      files.map(async (file) => {
+        const content = await file.text()
 
-  function persistProgress() {
-    if (!activeDoc) {
-      return
-    }
-
-    localStorage.setItem(progressKey(activeDoc.id), String(savedProgress))
-  }
-
-  function refreshLibraryStats() {
-    setLibraryRefreshToken((value) => value + 1)
-  }
-
-  function openDoc(docId) {
-    setActiveDocId(docId)
-    setView('reader')
-  }
-
-  function backToLibrary() {
-    persistProgress()
-    refreshLibraryStats()
-    setView('library')
-    setStatus('กลับมาที่ชั้นหนังสือแล้ว')
-    window.scrollTo({ top: 0, behavior: 'auto' })
-  }
-
-  function handleSaveBookmark() {
-    if (!activeDoc) {
-      return
-    }
-
-    const payload = {
-      progress: getReadingProgress(),
-      passageIndex: currentPassageRef.current.index,
-      heading: currentPassageRef.current.heading,
-      excerpt: currentPassageRef.current.excerpt,
-      savedAt: new Date().toLocaleString('th-TH', {
-        dateStyle: 'medium',
-        timeStyle: 'short',
+        return {
+          id: createId('book'),
+          title: stripExtension(file.name),
+          fileName: file.name,
+          folderId: targetFolderId,
+          content,
+          excerpt: extractLead(content),
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          lastOpenedAt: null,
+          lastReadAt: null,
+          progress: 0,
+          readerFontSize: prefs.fontSize,
+          bookmarks: [],
+        }
       }),
+    )
+
+    const duplicates = incomingBooks.filter((incoming) =>
+      books.some(
+        (book) =>
+          book.folderId === incoming.folderId &&
+          book.fileName.toLowerCase() === incoming.fileName.toLowerCase(),
+      ),
+    )
+
+    const acceptedBooks = incomingBooks.filter(
+      (incoming) => !duplicates.some((duplicate) => duplicate.id === incoming.id),
+    )
+
+    if (acceptedBooks.length) {
+      const nextBooks = [...acceptedBooks, ...books]
+      await putBooks(acceptedBooks)
+      await syncBooks(nextBooks)
+      showToast(`เพิ่มหนังสือ ${acceptedBooks.length} เล่มแล้ว`)
     }
 
-    localStorage.setItem(bookmarkKey(activeDoc.id), JSON.stringify(payload))
-    setBookmark(payload)
-    setStatus('มาร์กจุดอ่านปัจจุบันพร้อมจับข้อความบริเวณนั้นแล้ว')
-    refreshLibraryStats()
+    if (duplicates.length) {
+      showToast(`ข้าม ${duplicates.length} ไฟล์ที่ชื่อซ้ำในโฟลเดอร์นี้`)
+    }
+
+    setStatus('นำเข้าไฟล์ใหม่เรียบร้อยแล้ว')
+    setIsImporting(false)
+    event.target.value = ''
   }
 
-  function handleJumpToBookmark() {
-    if (!bookmark) {
+  function openFolderEditor(mode) {
+    setFolderDraft(mode === 'rename' ? currentFolder?.name ?? '' : '')
+    setFolderEditor({
+      open: true,
+      mode,
+      targetId: mode === 'rename' ? currentFolder?.id ?? null : null,
+    })
+  }
+
+  async function submitFolderEditor(event) {
+    event.preventDefault()
+
+    const name = folderDraft.trim()
+
+    if (!name) {
+      showToast('ตั้งชื่อโฟลเดอร์ก่อน')
       return
     }
 
-    const passageNodes = getPassageNodes(articleRef.current)
-    const targetNode =
-      typeof bookmark.passageIndex === 'number' ? passageNodes[bookmark.passageIndex] : null
+    if (folderEditor.mode === 'rename' && currentFolder) {
+      const updatedFolder = {
+        ...currentFolder,
+        name,
+        updatedAt: Date.now(),
+      }
 
-    if (targetNode) {
-      const top = Math.max(targetNode.getBoundingClientRect().top + window.scrollY - 132, 0)
-      window.scrollTo({ top, behavior: 'smooth' })
+      await putFolder(updatedFolder)
+      await syncFolders(
+        folders.map((folder) => (folder.id === updatedFolder.id ? updatedFolder : folder)),
+      )
+      setStatus(`เปลี่ยนชื่อโฟลเดอร์เป็น “${name}” แล้ว`)
     } else {
-      restoreProgress(bookmark.progress ?? 0, true)
+      const folder = {
+        id: createId('folder'),
+        name,
+        parentId: currentFolderId ?? null,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        fixed: false,
+      }
+
+      await putFolder(folder)
+      await syncFolders([...folders, folder])
+      setStatus(`สร้างโฟลเดอร์ “${name}” แล้ว`)
     }
 
-    setStatus('กลับไปที่จุดมาร์กเดิมแล้ว')
+    setFolderEditor({ open: false, mode: 'create', targetId: null })
+    setFolderDraft('')
+  }
+
+  async function handleDeleteFolder() {
+    if (!currentFolder || currentFolder.fixed) {
+      return
+    }
+
+    const hasChildren = folders.some((folder) => folder.parentId === currentFolder.id)
+    const hasBooks = books.some((book) => book.folderId === currentFolder.id)
+
+    if (hasChildren || hasBooks) {
+      showToast('ลบโฟลเดอร์ไม่ได้ ถ้ายังมีโฟลเดอร์ย่อยหรือหนังสืออยู่')
+      return
+    }
+
+    if (!window.confirm(`ลบโฟลเดอร์ “${currentFolder.name}” ?`)) {
+      return
+    }
+
+    await deleteFolder(currentFolder.id)
+    await syncFolders(folders.filter((folder) => folder.id !== currentFolder.id))
+    setCurrentFolderId(currentFolder.parentId ?? DEFAULT_FOLDER_ID)
+    setStatus('ลบโฟลเดอร์แล้ว')
+  }
+
+  async function handleOpenBook(bookId) {
+    setBookActionId(null)
+    setView('reader')
+    setActiveBookId(bookId)
+    await updateBook(bookId, { lastOpenedAt: Date.now() })
+  }
+
+  async function handleDeleteBook(bookId) {
+    const book = books.find((item) => item.id === bookId)
+
+    if (!book) {
+      return
+    }
+
+    if (!window.confirm(`ลบหนังสือ “${book.title}” ?`)) {
+      return
+    }
+
+    await deleteBook(bookId)
+    await syncBooks(books.filter((item) => item.id !== bookId))
+    setBookActionId(null)
+
+    if (activeBookId === bookId) {
+      setView('library')
+      setActiveBookId(null)
+    }
+
+    setStatus('ลบหนังสือแล้ว')
+  }
+
+  async function handleMoveBook(targetFolderId) {
+    if (!bookMoveId || !targetFolderId) {
+      return
+    }
+
+    await updateBook(bookMoveId, { folderId: targetFolderId })
+    setBookMoveId(null)
+    setBookActionId(null)
+    setStatus('ย้ายหนังสือไปโฟลเดอร์ใหม่แล้ว')
+  }
+
+  async function handleExportBackup() {
+    const payload = {
+      version: 1,
+      exportedAt: Date.now(),
+      folders,
+      books,
+      prefs,
+    }
+
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: 'application/json',
+    })
+
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `readshelf-backup-${new Date().toISOString().slice(0, 10)}.json`
+    anchor.click()
+    URL.revokeObjectURL(url)
+    showToast('ส่งออกแบ็กอัปแล้ว')
+  }
+
+  async function handleImportBackup(event) {
+    const file = event.target.files?.[0]
+
+    if (!file) {
+      return
+    }
+
+    const text = await file.text()
+
+    try {
+      const payload = JSON.parse(text)
+
+      if (!Array.isArray(payload.folders) || !Array.isArray(payload.books)) {
+        throw new Error('รูปแบบไฟล์สำรองไม่ถูกต้อง')
+      }
+
+      if (!window.confirm('นำเข้าแบ็กอัปนี้และแทนที่คลังหนังสือทั้งหมดหรือไม่?')) {
+        event.target.value = ''
+        return
+      }
+
+      await replaceLibrary({
+        folders: payload.folders,
+        books: payload.books,
+        prefs: { ...defaultPrefs, ...(payload.prefs ?? {}) },
+      })
+
+      await syncFolders(payload.folders)
+      await syncBooks(payload.books)
+      setPrefs({ ...defaultPrefs, ...(payload.prefs ?? {}) })
+      setCurrentFolderId(payload.folders[0]?.id ?? DEFAULT_FOLDER_ID)
+      setStatus('นำเข้าแบ็กอัปแล้ว')
+      showToast('กู้คืนคลังหนังสือสำเร็จ')
+    } catch (error) {
+      showToast(`เปิดไฟล์สำรองไม่สำเร็จ: ${String(error.message ?? error)}`)
+    }
+
+    event.target.value = ''
+  }
+
+  async function handleSaveReadingPoint() {
+    if (!activeBook) {
+      return
+    }
+
+    await updateBook(activeBook.id, {
+      progress: readerProgress,
+      lastReadAt: Date.now(),
+    })
+    showToast(`จำตำแหน่งอ่านไว้ที่ ${readerProgress}% แล้ว`)
+  }
+
+  async function handleAddBookmark() {
+    if (!activeBook) {
+      return
+    }
+
+    const nextBookmarks = [
+      {
+        id: createId('bookmark'),
+        progress: readerProgress,
+        excerpt: readerPassage.excerpt || `ตำแหน่ง ${readerProgress}%`,
+        heading: readerPassage.heading,
+        createdAt: Date.now(),
+      },
+      ...(activeBook.bookmarks ?? []),
+    ].sort((left, right) => left.progress - right.progress)
+
+    await updateBook(activeBook.id, {
+      bookmarks: nextBookmarks,
+    })
+    showToast('เพิ่มบุ๊กมาร์กแล้ว')
+  }
+
+  function jumpToProgress(progress) {
+    const scroller = readerScrollRef.current
+
+    if (!scroller) {
+      return
+    }
+
+    const max = Math.max(scroller.scrollHeight - scroller.clientHeight, 1)
+    scroller.scrollTo({ top: (progress / 100) * max, behavior: 'smooth' })
+    setBookmarkPanelOpen(false)
+  }
+
+  async function handleDeleteBookmark(bookmarkId) {
+    if (!activeBook) {
+      return
+    }
+
+    await updateBook(activeBook.id, {
+      bookmarks: (activeBook.bookmarks ?? []).filter((bookmark) => bookmark.id !== bookmarkId),
+    })
+  }
+
+  async function adjustReaderFont(delta) {
+    if (!activeBook) {
+      return
+    }
+
+    const nextFontSize = Math.min(24, Math.max(15, (activeBook.readerFontSize ?? prefs.fontSize) + delta))
+    await updateBook(activeBook.id, { readerFontSize: nextFontSize })
+    await syncPrefs({ ...prefs, fontSize: nextFontSize })
+  }
+
+  function closeReader() {
+    setView('library')
+    setActiveBookId(null)
+    setBookmarkPanelOpen(false)
+    setReaderPassage(EMPTY_PASSAGE)
+  }
+
+  function renderFolderOption(option) {
+    return (
+      <option key={option.id} value={option.id}>
+        {'\u00A0'.repeat(option.depth * 2)}
+        {option.name}
+      </option>
+    )
   }
 
   return (
-    <div className={view === 'library' ? 'app-shell library-shell' : 'app-shell reader-shell'}>
-      {view === 'library' ? (
-        <main className="library-view">
-          <section className="library-hero">
-            <div className="library-copy">
-              <p className="eyebrow">ReadMD Library</p>
-              <h1>คลังหนังสือ Markdown สำหรับเปิดบน iPad แล้วอ่านต่อได้ลื่นกว่าเดิม</h1>
-              <p className="library-lede">
-                เลือกไฟล์จากชั้นหนังสือด้านล่าง แล้วค่อยเข้าโหมดอ่านเต็มหน้าที่มีปุ่มมาร์กลอยและจำจุดอ่านให้เอง
-              </p>
-              <div className="library-meta">
-                <span>{libraryDocs.length} ไฟล์พร้อมอ่าน</span>
-                <span>{status}</span>
+    <div className="app-shell">
+      <header className="app-header">
+        <div>
+          <p className="eyebrow">ReadShelf Personal</p>
+          <h1>ชั้นหนังสือส่วนตัวสำหรับ iPad ของคุณ</h1>
+          <p className="header-copy">
+            ทำงานได้ดีบน iPad Air 5 ด้วยปุ่มแตะง่าย ชั้นหนังสือเป็นหมวดชัด และข้อมูลเก็บในเครื่องอย่างเป็นระบบ
+          </p>
+        </div>
+
+        <div className="header-actions">
+          <button type="button" className="ghost-button" onClick={() => openFolderEditor('create')}>
+            สร้างโฟลเดอร์
+          </button>
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isImporting}
+          >
+            {isImporting ? 'กำลังนำเข้า...' : 'เพิ่มหนังสือ'}
+          </button>
+          <button type="button" className="ghost-button" onClick={handleExportBackup}>
+            ส่งออกแบ็กอัป
+          </button>
+          <button type="button" className="primary-button" onClick={() => backupInputRef.current?.click()}>
+            นำเข้าแบ็กอัป
+          </button>
+        </div>
+      </header>
+
+      <section className="stats-bar">
+        <article className="stat-card">
+          <strong>{stats.totalBooks}</strong>
+          <span>หนังสือทั้งหมด</span>
+        </article>
+        <article className="stat-card">
+          <strong>{stats.totalFolders}</strong>
+          <span>โฟลเดอร์</span>
+        </article>
+        <article className="stat-card">
+          <strong>{stats.readingBooks}</strong>
+          <span>กำลังอ่าน</span>
+        </article>
+        <article className="stat-card">
+          <strong>{stats.finishedBooks}</strong>
+          <span>อ่านจบแล้ว</span>
+        </article>
+        <article className="stat-card">
+          <strong>{stats.totalBooks ? `${stats.avgProgress}%` : '—'}</strong>
+          <span>เฉลี่ยความคืบหน้า</span>
+        </article>
+        <article className="stat-card">
+          <strong>{storageMode}</strong>
+          <span>โหมดจัดเก็บ</span>
+        </article>
+      </section>
+
+      <main className="app-main">
+        <aside className="folder-panel">
+          <div className="panel-header">
+            <p className="eyebrow">Folders</p>
+            <h2>ผังชั้นหนังสือ</h2>
+          </div>
+
+          <nav className="folder-tree">
+            {folderTree.map((folder) => (
+              <button
+                key={folder.id}
+                type="button"
+                className={`folder-item ${folder.id === currentFolderId ? 'active' : ''}`}
+                style={{ '--depth': folder.depth }}
+                onClick={() => setCurrentFolderId(folder.id)}
+              >
+                <span>{folder.name}</span>
+                <small>{books.filter((book) => book.folderId === folder.id).length}</small>
+              </button>
+            ))}
+          </nav>
+
+          <div className="panel-footer">
+            <p>{status}</p>
+          </div>
+        </aside>
+
+        <section className="library-panel">
+          <div className="panel-header panel-header-spread">
+            <div>
+              <p className="eyebrow">Now Browsing</p>
+              <h2>{currentFolder?.name ?? 'กำลังโหลดโฟลเดอร์'}</h2>
+              <div className="breadcrumb">
+                {breadcrumb.map((folder, index) => (
+                  <span key={folder.id}>
+                    {folder.name}
+                    {index < breadcrumb.length - 1 ? ' / ' : ''}
+                  </span>
+                ))}
               </div>
             </div>
 
-            <div className="library-visual" aria-hidden="true">
-              <div className="visual-stack">
-                <span />
-                <span />
-                <span />
-              </div>
-              <div className="visual-note">
-                <strong>Flow ใหม่</strong>
-                <p>ชั้นหนังสือก่อน แล้วค่อยเข้าสู่ reader ที่มี HUD ลอยตามสายตา</p>
-              </div>
-            </div>
-          </section>
-
-          <section className="library-grid" aria-label="ชั้นหนังสือ Markdown">
-          {isLoadingLibrary ? (
-            <article className="book-card loading-card">
-              <p>กำลังโหลดรายการหนังสือจากคลัง GitHub...</p>
-            </article>
-          ) : (
-            libraryGroups.map((group) => (
-              <section key={group.key} className="shelf-group">
-                <div className="shelf-heading">
-                  <p className="eyebrow">Shelf</p>
-                  <h2>{group.label}</h2>
-                  <small>{group.docs.length} ไฟล์ในหมวดนี้</small>
-                </div>
-
-                <div className="shelf-books">
-                  {group.docs.map((doc) => (
-                    <button
-                      key={doc.id}
-                      type="button"
-                      className={`book-card tone-${doc.shelfTone}`}
-                      onClick={() => openDoc(doc.id)}
-                    >
-                      <span className="book-spine">.md</span>
-                      <div className="book-content">
-                        <p className="book-kicker">{doc.folderLabel}</p>
-                        <h2>{doc.title}</h2>
-                        <p>{doc.description}</p>
-                        <div className="book-progress">
-                          <span>อ่านไปแล้ว {doc.progress}%</span>
-                          <div className="progress-track" aria-hidden="true">
-                            <span style={{ width: `${doc.progress}%` }} />
-                          </div>
-                        </div>
-                        <div className="book-footer">
-                          <small>
-                            {doc.bookmark?.savedAt
-                              ? `Bookmark ล่าสุด ${doc.bookmark.savedAt}`
-                              : doc.relativePath}
-                          </small>
-                          <strong>เปิดอ่าน</strong>
-                        </div>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </section>
-            ))
-          )}
-          </section>
-        </main>
-      ) : (
-        <main className="reader-view">
-          <header className="reader-topbar">
-            <button type="button" className="back-button" onClick={backToLibrary}>
-              กลับไปชั้นหนังสือ
-            </button>
-            <div className="reader-title">
-              <p className="eyebrow">Now Reading</p>
-              <h1>{activeDoc?.title ?? 'กำลังเปิดไฟล์'}</h1>
-            </div>
-            <div className="reader-chip">
-              <span>{savedProgress}%</span>
-              <small>อ่านถึงตรงนี้แล้ว</small>
-            </div>
-          </header>
-
-          <aside className="floating-hud">
-            <div className="hud-card">
-              <p className="hud-label">ตำแหน่งปัจจุบัน</p>
-              <h2>{currentPassage.heading}</h2>
-              <p className="hud-excerpt">{currentPassage.excerpt}</p>
-              <div className="progress-track" aria-hidden="true">
-                <span style={{ width: `${savedProgress}%` }} />
-              </div>
-              <p className="hud-meta">อ่านไปแล้ว {savedProgress}%</p>
-            </div>
-
-            <div className="hud-card bookmark-card">
-              <p className="hud-label">จุดมาร์ก</p>
-              <p className="hud-excerpt">
-                {bookmark?.excerpt ?? 'ยังไม่มีจุดมาร์กสำหรับไฟล์นี้ กดปุ่มด้านล่างเมื่อถึงช่วงที่อยากกลับมาอ่าน'}
-              </p>
-              <p className="hud-meta">
-                {bookmark?.savedAt ? `${bookmark.savedAt} · ${bookmark.progress}%` : 'ยังไม่ได้บันทึก'}
-              </p>
-            </div>
-          </aside>
-
-          <section className="reader-body">
-            <article ref={articleRef} className="markdown-body">
-              <ReactMarkdown>
-                {content || (isLoadingContent ? '# กำลังโหลด...\n\nรอสักครู่' : '# ยังไม่มีเอกสาร')}
-              </ReactMarkdown>
-            </article>
-          </section>
-
-          <div className="reader-dock">
-            <div className="reader-dock-copy">
-              <p className="hud-label">จุดมาร์กลอย</p>
-              <strong>{bookmark?.heading ?? currentPassage.heading}</strong>
-              <small>
-                {bookmark?.excerpt
-                  ? trimText(bookmark.excerpt, 88)
-                  : 'กดมาร์กตอนถึงย่อหน้าที่อยากกลับมาอ่าน แล้วปุ่มนี้จะตามคุณไปตลอด'}
-              </small>
-            </div>
-
-            <div className="floating-actions">
-              <button type="button" onClick={handleSaveBookmark}>
-                มาร์กตรงนี้
+            <div className="folder-actions">
+              <select
+                value={prefs.sortBy}
+                onChange={(event) => syncPrefs({ ...prefs, sortBy: event.target.value })}
+              >
+                <option value="recent">เรียงตามล่าสุด</option>
+                <option value="title">เรียงตามชื่อ</option>
+                <option value="progress">เรียงตามความคืบหน้า</option>
+              </select>
+              <button type="button" className="ghost-button" onClick={() => openFolderEditor('create')}>
+                โฟลเดอร์ย่อย
               </button>
               <button
                 type="button"
                 className="ghost-button"
-                onClick={handleJumpToBookmark}
-                disabled={!bookmark}
+                onClick={() => openFolderEditor('rename')}
+                disabled={!currentFolder || currentFolder.fixed}
               >
-                กลับไปจุดมาร์ก
+                เปลี่ยนชื่อ
+              </button>
+              <button
+                type="button"
+                className="ghost-button danger"
+                onClick={handleDeleteFolder}
+                disabled={!currentFolder || currentFolder.fixed}
+              >
+                ลบโฟลเดอร์
               </button>
             </div>
           </div>
-        </main>
-      )}
+
+          <section className="recent-section">
+            <div className="section-heading">
+              <p className="eyebrow">Continue Reading</p>
+              <h3>เล่มที่กำลังอ่านต่อ</h3>
+            </div>
+            <div className="recent-row">
+              {recentBooks.length ? (
+                recentBooks.map((book) => (
+                  <button
+                    key={book.id}
+                    type="button"
+                    className="recent-card"
+                    onClick={() => handleOpenBook(book.id)}
+                  >
+                    <strong>{book.title}</strong>
+                    <p>{trimText(book.excerpt, 90)}</p>
+                    <div className="recent-meta">
+                      <span>{book.progress ?? 0}%</span>
+                      <small>{formatCompactDate(book.lastOpenedAt)}</small>
+                    </div>
+                  </button>
+                ))
+              ) : (
+                <div className="placeholder-card">ยังไม่มีเล่มที่เปิดอ่านล่าสุด</div>
+              )}
+            </div>
+          </section>
+
+          <section className="subfolder-section">
+            <div className="section-heading">
+              <p className="eyebrow">Subfolders</p>
+              <h3>โฟลเดอร์ย่อยในชั้นนี้</h3>
+            </div>
+            <div className="folder-grid">
+              {childFolders.length ? (
+                childFolders.map((folder) => (
+                  <button
+                    key={folder.id}
+                    type="button"
+                    className="folder-card"
+                    onClick={() => setCurrentFolderId(folder.id)}
+                  >
+                    <strong>{folder.name}</strong>
+                    <p>{books.filter((book) => book.folderId === folder.id).length} เล่มในโฟลเดอร์นี้</p>
+                  </button>
+                ))
+              ) : (
+                <div className="placeholder-card">ยังไม่มีโฟลเดอร์ย่อยในชั้นนี้</div>
+              )}
+            </div>
+          </section>
+
+          <section className="book-section">
+            <div className="section-heading">
+              <p className="eyebrow">Shelf</p>
+              <h3>หนังสือในโฟลเดอร์นี้</h3>
+            </div>
+
+            {isBooting ? (
+              <div className="placeholder-card">กำลังเตรียมชั้นหนังสือ...</div>
+            ) : folderBooks.length ? (
+              <div className="book-grid">
+                {folderBooks.map((book, index) => (
+                  <article key={book.id} className={`book-card tone-${index % 4}`}>
+                    <button type="button" className="book-open" onClick={() => handleOpenBook(book.id)}>
+                      <span className="book-spine">{book.fileName.replace(/\.(md|markdown|txt)$/i, '').slice(0, 18)}</span>
+                      <div className="book-card-body">
+                        <p className="book-kicker">{formatDate(book.lastOpenedAt)}</p>
+                        <h4>{book.title}</h4>
+                        <p>{trimText(book.excerpt, 120)}</p>
+                        <div className="progress-line">
+                          <span style={{ width: `${book.progress ?? 0}%` }} />
+                        </div>
+                        <div className="book-meta">
+                          <small>{book.bookmarks?.length ?? 0} bookmarks</small>
+                          <strong>{book.progress ?? 0}%</strong>
+                        </div>
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      className="book-menu"
+                      onClick={() => setBookActionId((current) => (current === book.id ? null : book.id))}
+                    >
+                      •••
+                    </button>
+
+                    {bookActionId === book.id ? (
+                      <div className="book-sheet">
+                        <button type="button" onClick={() => handleOpenBook(book.id)}>
+                          เปิดอ่าน
+                        </button>
+                        <button type="button" onClick={() => setBookMoveId(book.id)}>
+                          ย้ายโฟลเดอร์
+                        </button>
+                        <button type="button" className="danger" onClick={() => handleDeleteBook(book.id)}>
+                          ลบหนังสือ
+                        </button>
+                      </div>
+                    ) : null}
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <div className="placeholder-card">
+                โฟลเดอร์นี้ยังไม่มีหนังสือ กด “เพิ่มหนังสือ” เพื่อ import ไฟล์ `.md`
+              </div>
+            )}
+          </section>
+        </section>
+      </main>
+
+      {view === 'reader' && activeBook ? (
+        <div className="reader-overlay">
+          <section className="reader-panel">
+            <header className="reader-topbar">
+              <button type="button" className="ghost-button" onClick={closeReader}>
+                กลับชั้นหนังสือ
+              </button>
+              <div className="reader-heading">
+                <p className="eyebrow">Now Reading</p>
+                <h2>{activeBook.title}</h2>
+                <span>{currentFolder?.name ?? 'ชั้นหนังสือ'}</span>
+              </div>
+              <div className="reader-tools">
+                <button type="button" className="ghost-button" onClick={() => adjustReaderFont(-1)}>
+                  A-
+                </button>
+                <button type="button" className="ghost-button" onClick={() => adjustReaderFont(1)}>
+                  A+
+                </button>
+                <button
+                  type="button"
+                  className="ghost-button"
+                  onClick={() => setBookmarkPanelOpen((current) => !current)}
+                >
+                  บุ๊กมาร์ก
+                </button>
+              </div>
+            </header>
+
+            <div className="reader-progress-track">
+              <span style={{ width: `${readerProgress}%` }} />
+            </div>
+
+            <div className="reader-content-wrap">
+              <aside className="reader-sidecard">
+                <p className="eyebrow">Reading Status</p>
+                <h3>{readerPassage.heading}</h3>
+                <p>{readerPassage.excerpt}</p>
+                <div className="reader-side-meta">
+                  <span>{readerProgress}%</span>
+                  <small>อัปเดตล่าสุด {formatDate(activeBook.lastReadAt)}</small>
+                </div>
+              </aside>
+
+              <div className="reader-scroll" ref={readerScrollRef}>
+                <article
+                  ref={articleRef}
+                  className="markdown-body"
+                  style={{ '--reader-font-size': `${activeBook.readerFontSize ?? prefs.fontSize}px` }}
+                >
+                  <ReactMarkdown>{activeBook.content}</ReactMarkdown>
+                </article>
+              </div>
+            </div>
+
+            <footer className="reader-bottom">
+              <div className="reader-bottom-copy">
+                <p className="eyebrow">ตำแหน่งอ่านล่าสุด</p>
+                <strong>{readerPassage.heading}</strong>
+                <small>{trimText(readerPassage.excerpt, 100)}</small>
+              </div>
+              <div className="reader-bottom-actions">
+                <button type="button" className="ghost-button" onClick={handleAddBookmark}>
+                  บุ๊กมาร์กตำแหน่งนี้
+                </button>
+                <button type="button" className="primary-button" onClick={handleSaveReadingPoint}>
+                  บันทึกว่าอ่านถึงนี่
+                </button>
+              </div>
+            </footer>
+
+            {bookmarkPanelOpen ? (
+              <div className="bookmark-panel">
+                <div className="section-heading">
+                  <p className="eyebrow">Bookmarks</p>
+                  <h3>จุดที่คุณมาร์กไว้</h3>
+                </div>
+                <div className="bookmark-list">
+                  {(activeBook.bookmarks ?? []).length ? (
+                    activeBook.bookmarks.map((bookmark) => (
+                      <article key={bookmark.id} className="bookmark-item">
+                        <button type="button" className="bookmark-open" onClick={() => jumpToProgress(bookmark.progress)}>
+                          <strong>{bookmark.heading}</strong>
+                          <p>{bookmark.excerpt}</p>
+                          <small>{bookmark.progress}% • {formatDate(bookmark.createdAt)}</small>
+                        </button>
+                        <button
+                          type="button"
+                          className="book-menu danger"
+                          onClick={() => handleDeleteBookmark(bookmark.id)}
+                        >
+                          ลบ
+                        </button>
+                      </article>
+                    ))
+                  ) : (
+                    <div className="placeholder-card">ยังไม่มีบุ๊กมาร์กสำหรับเล่มนี้</div>
+                  )}
+                </div>
+              </div>
+            ) : null}
+          </section>
+        </div>
+      ) : null}
+
+      {folderEditor.open ? (
+        <div className="modal-overlay" onClick={() => setFolderEditor({ open: false, mode: 'create', targetId: null })}>
+          <form className="modal-card" onClick={(event) => event.stopPropagation()} onSubmit={submitFolderEditor}>
+            <p className="eyebrow">{folderEditor.mode === 'rename' ? 'Rename Folder' : 'Create Folder'}</p>
+            <h3>{folderEditor.mode === 'rename' ? 'เปลี่ยนชื่อโฟลเดอร์' : 'สร้างโฟลเดอร์ใหม่'}</h3>
+            <input
+              type="text"
+              value={folderDraft}
+              onChange={(event) => setFolderDraft(event.target.value)}
+              placeholder="ชื่อโฟลเดอร์"
+              autoFocus
+            />
+            <div className="modal-actions">
+              <button type="button" className="ghost-button" onClick={() => setFolderEditor({ open: false, mode: 'create', targetId: null })}>
+                ยกเลิก
+              </button>
+              <button type="submit" className="primary-button">
+                บันทึก
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
+
+      {bookMoveId ? (
+        <div className="modal-overlay" onClick={() => setBookMoveId(null)}>
+          <div className="modal-card" onClick={(event) => event.stopPropagation()}>
+            <p className="eyebrow">Move Book</p>
+            <h3>ย้ายหนังสือไปโฟลเดอร์อื่น</h3>
+            <select defaultValue="" onChange={(event) => handleMoveBook(event.target.value)}>
+              <option value="" disabled>
+                เลือกโฟลเดอร์ปลายทาง
+              </option>
+              {folderTree.map(renderFolderOption)}
+            </select>
+            <div className="modal-actions">
+              <button type="button" className="ghost-button" onClick={() => setBookMoveId(null)}>
+                ปิด
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {toastMessage ? <div className="toast show">{toastMessage}</div> : null}
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".md,.markdown,.txt"
+        multiple
+        className="hidden-input"
+        onChange={handleImportFiles}
+      />
+      <input
+        ref={backupInputRef}
+        type="file"
+        accept="application/json,.json"
+        className="hidden-input"
+        onChange={handleImportBackup}
+      />
     </div>
   )
 }
