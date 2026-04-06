@@ -9,6 +9,7 @@ const defaultPrefs = {
   sortBy: 'recent',
   fontSize: 18,
   lastBackupAt: null,
+  lastBackupReminderDismissedAt: null,
 }
 
 let dbPromise = null

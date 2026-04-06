@@ -229,6 +229,39 @@ select {
   letter-spacing: 0.04em;
 }
 
+.backup-reminder {
+  margin-top: 1rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 1rem;
+  align-items: center;
+  padding: 1rem 1.15rem;
+  border-radius: 24px;
+  background: linear-gradient(135deg, rgba(212, 139, 23, 0.16), rgba(255, 249, 240, 0.84));
+  border: 1px solid rgba(212, 139, 23, 0.28);
+  box-shadow: var(--shadow-soft);
+}
+
+.backup-reminder h3 {
+  margin: 0.35rem 0 0.45rem;
+  font-family: 'Playfair Display', serif;
+  font-size: clamp(1.24rem, 2vw, 1.7rem);
+  line-height: 1.08;
+}
+
+.backup-reminder p {
+  margin: 0;
+  color: var(--ink-soft);
+  line-height: 1.65;
+}
+
+.backup-reminder-actions {
+  display: flex;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+  justify-content: end;
+}
+
 .app-main {
   margin-top: 1.2rem;
   display: grid;
@@ -829,6 +862,10 @@ select {
     grid-template-columns: 1fr;
   }
 
+  .backup-reminder {
+    grid-template-columns: 1fr;
+  }
+
   .recent-row,
   .folder-grid,
   .book-grid {
@@ -895,11 +932,16 @@ select {
   }
 
   .assurance-strip,
+  .backup-reminder-actions,
   .folder-tree,
   .recent-row,
   .folder-grid,
   .book-grid {
     grid-template-columns: 1fr;
+  }
+
+  .backup-reminder-actions {
+    display: grid;
   }
 
   .panel-header-spread,

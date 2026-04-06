@@ -52,6 +52,35 @@ const STORAGE_MODE_LABEL = {
   localStorage: 'localStorage',
 }
 
+function isSameCalendarDay(leftValue, rightValue) {
+  if (!leftValue || !rightValue) {
+    return false
+  }
+
+  const left = new Date(leftValue)
+  const right = new Date(rightValue)
+
+  return (
+    left.getFullYear() === right.getFullYear() &&
+    left.getMonth() === right.getMonth() &&
+    left.getDate() === right.getDate()
+  )
+}
+
+function createBackupPayload(folders, books, prefs, exportedAt) {
+  return {
+    version: 1,
+    exportedAt,
+    folders,
+    books,
+    prefs,
+  }
+}
+
+function buildBackupFileName(extension = 'json', date = new Date()) {
+  return `readshelf-backup-${date.toISOString().slice(0, 10)}.${extension}`
+}
+
 function createId(prefix) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 }
@@ -347,6 +376,19 @@ function App() {
       detail: 'เบราว์เซอร์นี้เก็บข้อมูลใน IndexedDB เพื่อรองรับหนังสือและโฟลเดอร์ได้มากกว่าเดิม',
     }
   }, [storageMode])
+
+  const needsBackupReminder = useMemo(() => {
+    if (!books.length) {
+      return false
+    }
+
+    const now = Date.now()
+
+    return (
+      !isSameCalendarDay(prefs.lastBackupAt, now) &&
+      !isSameCalendarDay(prefs.lastBackupReminderDismissedAt, now)
+    )
+  }, [books.length, prefs.lastBackupAt, prefs.lastBackupReminderDismissedAt])
 
   useEffect(() => {
     let active = true
@@ -716,17 +758,13 @@ function App() {
   }
 
   async function handleExportBackup() {
+    const exportedAt = Date.now()
     const nextPrefs = {
       ...prefs,
-      lastBackupAt: Date.now(),
+      lastBackupAt: exportedAt,
+      lastBackupReminderDismissedAt: exportedAt,
     }
-    const payload = {
-      version: 1,
-      exportedAt: Date.now(),
-      folders,
-      books,
-      prefs: nextPrefs,
-    }
+    const payload = createBackupPayload(folders, books, nextPrefs, exportedAt)
 
     const blob = new Blob([JSON.stringify(payload, null, 2)], {
       type: 'application/json',
@@ -735,13 +773,66 @@ function App() {
     const url = URL.createObjectURL(blob)
     const anchor = document.createElement('a')
     anchor.href = url
-    anchor.download = `readshelf-backup-${new Date().toISOString().slice(0, 10)}.json`
+    anchor.download = buildBackupFileName('json', new Date(exportedAt))
     anchor.click()
     URL.revokeObjectURL(url)
     setPrefs(nextPrefs)
     await putPrefs(nextPrefs)
     showToast('ส่งออกแบ็กอัปแล้ว')
     setStatus('สำรองข้อมูลของเครื่องนี้เรียบร้อยแล้ว')
+  }
+
+  async function handleShareBackup() {
+    const exportedAt = Date.now()
+    const nextPrefs = {
+      ...prefs,
+      lastBackupAt: exportedAt,
+      lastBackupReminderDismissedAt: exportedAt,
+    }
+    const payload = createBackupPayload(folders, books, nextPrefs, exportedAt)
+    const payloadText = JSON.stringify(payload, null, 2)
+    const shareFile = new File([payloadText], buildBackupFileName('txt', new Date(exportedAt)), {
+      type: 'text/plain',
+    })
+
+    try {
+      if (
+        typeof navigator !== 'undefined' &&
+        typeof navigator.share === 'function' &&
+        (!navigator.canShare || navigator.canShare({ files: [shareFile] }))
+      ) {
+        await navigator.share({
+          title: 'ReadShelf Backup',
+          text: 'สำรองคลังหนังสือ ReadShelf Personal',
+          files: [shareFile],
+        })
+
+        setPrefs(nextPrefs)
+        await putPrefs(nextPrefs)
+        showToast('เปิดหน้าต่างแชร์แบ็กอัปแล้ว')
+        setStatus('ส่งไฟล์แบ็กอัปไป Files หรือ Google Drive ได้จากหน้าต่างแชร์นี้')
+        return
+      }
+    } catch (error) {
+      if (error?.name === 'AbortError') {
+        showToast('ยกเลิกการแชร์แบ็กอัป')
+        return
+      }
+    }
+
+    await handleExportBackup()
+    showToast('เครื่องนี้ไม่รองรับการแชร์ไฟล์โดยตรง จึงดาวน์โหลดแบ็กอัปให้แทน')
+  }
+
+  async function handleDismissBackupReminder() {
+    const nextPrefs = {
+      ...prefs,
+      lastBackupReminderDismissedAt: Date.now(),
+    }
+
+    setPrefs(nextPrefs)
+    await putPrefs(nextPrefs)
+    showToast('ปิดการเตือนวันนี้แล้ว')
   }
 
   async function handleImportBackup(event) {
@@ -889,6 +980,9 @@ function App() {
           >
             {isImporting ? 'กำลังนำเข้า...' : 'เพิ่มหนังสือ'}
           </button>
+          <button type="button" className="ghost-button" onClick={handleShareBackup}>
+            แชร์แบ็กอัป
+          </button>
           <button type="button" className="ghost-button" onClick={handleExportBackup}>
             ส่งออกแบ็กอัป
           </button>
@@ -946,6 +1040,24 @@ function App() {
           <p>ก่อนล้างเครื่อง เปลี่ยนเบราว์เซอร์ หรือย้ายไปอุปกรณ์ใหม่ ให้ส่งออกแบ็กอัปก่อนทุกครั้ง</p>
         </article>
       </section>
+
+      {needsBackupReminder ? (
+        <section className="backup-reminder" aria-live="polite">
+          <div className="backup-reminder-copy">
+            <p className="eyebrow">Daily Reminder</p>
+            <h3>วันนี้ยังไม่ได้สำรองข้อมูล</h3>
+            <p>ถ้าต่อเน็ตอยู่ กดแชร์แบ็กอัปเพื่อส่งเข้า Files หรือ Google Drive ได้เลย</p>
+          </div>
+          <div className="backup-reminder-actions">
+            <button type="button" className="ghost-button" onClick={handleDismissBackupReminder}>
+              เตือนพรุ่งนี้
+            </button>
+            <button type="button" className="primary-button" onClick={handleShareBackup}>
+              สำรองตอนนี้
+            </button>
+          </div>
+        </section>
+      ) : null}
 
       <main className="app-main">
         <aside className="folder-panel">
