@@ -122,8 +122,9 @@ select {
 }
 
 .compact-actions {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  min-width: min(420px, 100%);
+  grid-template-columns: minmax(140px, 180px);
+  min-width: 0;
+  justify-content: end;
 }
 
 .ghost-button,
@@ -366,6 +367,22 @@ select {
 .subfolder-section,
 .book-section {
   margin-top: 1.4rem;
+}
+
+.library-bottom-actions {
+  position: sticky;
+  bottom: 1rem;
+  z-index: 3;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.7rem;
+  margin-top: 1.4rem;
+  padding: 0.9rem;
+  border-radius: 22px;
+  background: rgba(255, 249, 241, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  box-shadow: 0 18px 40px rgba(35, 23, 15, 0.12);
+  backdrop-filter: blur(12px);
 }
 
 .section-heading {
@@ -1003,6 +1020,10 @@ select {
   .book-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .library-bottom-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 920px) {
@@ -1047,7 +1068,8 @@ select {
 
   .summary-pills,
   .backup-reminder-actions,
-  .book-grid {
+  .book-grid,
+  .library-bottom-actions {
     grid-template-columns: 1fr;
   }
 
@@ -1069,6 +1091,11 @@ select {
   .reader-bottom {
     left: 0.8rem;
     right: 0.8rem;
+  }
+
+  .library-bottom-actions {
+    bottom: 0.35rem;
+    padding-bottom: max(0.9rem, env(safe-area-inset-bottom));
   }
 
   .book-open {

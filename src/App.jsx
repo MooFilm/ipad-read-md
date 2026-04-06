@@ -985,20 +985,6 @@ function App() {
         </div>
 
         <div className="header-actions compact-actions">
-          <button
-            type="button"
-            className="ghost-button"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={isImporting}
-          >
-            {isImporting ? 'กำลังนำเข้า...' : 'เพิ่มหนังสือ'}
-          </button>
-          <button type="button" className="ghost-button" onClick={() => openFolderEditor('create')}>
-            เพิ่มโฟลเดอร์
-          </button>
-          <button type="button" className="ghost-button" onClick={handleShareBackup}>
-            แบ็กอัป
-          </button>
           <button type="button" className="primary-button" onClick={() => setHelpOpen(true)}>
             คู่มือ
           </button>
@@ -1067,9 +1053,6 @@ function App() {
                 <option value="title">ตามชื่อ</option>
                 <option value="progress">ตามความคืบหน้า</option>
               </select>
-              <button type="button" className="ghost-button" onClick={() => openFolderEditor('create')}>
-                โฟลเดอร์ย่อย
-              </button>
               <button
                 type="button"
                 className="ghost-button"
@@ -1085,9 +1068,6 @@ function App() {
                 disabled={!currentFolder || currentFolder.fixed}
               >
                 ลบโฟลเดอร์
-              </button>
-              <button type="button" className="ghost-button" onClick={() => backupInputRef.current?.click()}>
-                กู้คืน
               </button>
             </div>
           </div>
@@ -1198,6 +1178,26 @@ function App() {
                 โฟลเดอร์นี้ยังไม่มีหนังสือ กด “เพิ่มหนังสือ” เพื่อ import ไฟล์ `.md`
               </div>
             )}
+          </section>
+
+          <section className="library-bottom-actions">
+            <button
+              type="button"
+              className="primary-button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isImporting}
+            >
+              {isImporting ? 'กำลังนำเข้า...' : 'เพิ่มหนังสือ'}
+            </button>
+            <button type="button" className="ghost-button" onClick={() => openFolderEditor('create')}>
+              {currentFolder?.parentId ? 'เพิ่มโฟลเดอร์ย่อย' : 'เพิ่มโฟลเดอร์'}
+            </button>
+            <button type="button" className="ghost-button" onClick={handleShareBackup}>
+              แบ็กอัป
+            </button>
+            <button type="button" className="ghost-button" onClick={() => backupInputRef.current?.click()}>
+              กู้คืน
+            </button>
           </section>
         </section>
       </main>
