@@ -282,6 +282,7 @@ function App() {
   const [bookActionId, setBookActionId] = useState(null)
   const [bookMoveId, setBookMoveId] = useState(null)
   const [bookmarkPanelOpen, setBookmarkPanelOpen] = useState(false)
+  const [helpOpen, setHelpOpen] = useState(false)
   const [readerPassage, setReaderPassage] = useState(EMPTY_PASSAGE)
   const [readerProgress, setReaderProgress] = useState(0)
   const [toastMessage, setToastMessage] = useState('')
@@ -337,6 +338,8 @@ function App() {
         .slice(0, 6),
     [books],
   )
+
+  const latestReadingBook = useMemo(() => recentBooks[0] ?? null, [recentBooks])
 
   const stats = useMemo(() => {
     const totalBooks = books.length
@@ -716,6 +719,14 @@ function App() {
     setStatus('ลบโฟลเดอร์แล้ว')
   }
 
+  function handleNavigateUp() {
+    if (!currentFolder) {
+      return
+    }
+
+    setCurrentFolderId(currentFolder.parentId ?? DEFAULT_FOLDER_ID)
+  }
+
   async function handleOpenBook(bookId) {
     setBookActionId(null)
     setView('reader')
@@ -959,19 +970,21 @@ function App() {
 
   return (
     <div className="app-shell">
-      <header className="app-header">
-        <div>
+      <header className="app-header simple-header">
+        <div className="header-main">
           <p className="eyebrow">ReadShelf Personal</p>
-          <h1>ชั้นหนังสือส่วนตัวสำหรับ iPad ของคุณ</h1>
-          <p className="header-copy">
-            ทำงานได้ดีบน iPad Air 5 ด้วยปุ่มแตะง่าย ชั้นหนังสือเป็นหมวดชัด และข้อมูลเก็บในเครื่องอย่างเป็นระบบ
-          </p>
+          <h1>ชั้นหนังสือส่วนตัว</h1>
+          <div className="header-breadcrumb">
+            {breadcrumb.map((folder, index) => (
+              <span key={folder.id}>
+                {folder.name}
+                {index < breadcrumb.length - 1 ? ' / ' : ''}
+              </span>
+            ))}
+          </div>
         </div>
 
-        <div className="header-actions">
-          <button type="button" className="ghost-button" onClick={() => openFolderEditor('create')}>
-            สร้างโฟลเดอร์
-          </button>
+        <div className="header-actions compact-actions">
           <button
             type="button"
             className="ghost-button"
@@ -980,77 +993,46 @@ function App() {
           >
             {isImporting ? 'กำลังนำเข้า...' : 'เพิ่มหนังสือ'}
           </button>
+          <button type="button" className="ghost-button" onClick={() => openFolderEditor('create')}>
+            เพิ่มโฟลเดอร์
+          </button>
           <button type="button" className="ghost-button" onClick={handleShareBackup}>
-            แชร์แบ็กอัป
+            แบ็กอัป
           </button>
-          <button type="button" className="ghost-button" onClick={handleExportBackup}>
-            ส่งออกแบ็กอัป
-          </button>
-          <button type="button" className="primary-button" onClick={() => backupInputRef.current?.click()}>
-            นำเข้าแบ็กอัป
+          <button type="button" className="primary-button" onClick={() => setHelpOpen(true)}>
+            คู่มือ
           </button>
         </div>
       </header>
 
-      <section className="stats-bar">
-        <article className="stat-card">
+      <section className="summary-pills">
+        <article className="summary-pill">
           <strong>{stats.totalBooks}</strong>
-          <span>หนังสือทั้งหมด</span>
+          <span>หนังสือ</span>
         </article>
-        <article className="stat-card">
+        <article className="summary-pill">
           <strong>{stats.totalFolders}</strong>
           <span>โฟลเดอร์</span>
         </article>
-        <article className="stat-card">
+        <article className="summary-pill">
           <strong>{stats.readingBooks}</strong>
           <span>กำลังอ่าน</span>
         </article>
-        <article className="stat-card">
-          <strong>{stats.finishedBooks}</strong>
-          <span>อ่านจบแล้ว</span>
-        </article>
-        <article className="stat-card">
+        <article className="summary-pill">
           <strong>{stats.totalBooks ? `${stats.avgProgress}%` : '—'}</strong>
-          <span>เฉลี่ยความคืบหน้า</span>
-        </article>
-        <article className="stat-card">
-          <strong>{STORAGE_MODE_LABEL[storageMode] ?? storageMode}</strong>
-          <span>โหมดจัดเก็บ</span>
-        </article>
-      </section>
-
-      <section className="assurance-strip">
-        <article className="assurance-card">
-          <p className="eyebrow">Private by Device</p>
-          <h3>หนังสือที่ import จะอยู่ในเครื่องนี้เท่านั้น</h3>
-          <p>
-            ตัวแอปเปิดจาก GitHub ได้ แต่หนังสือ โฟลเดอร์ และตำแหน่งที่อ่านจะไม่ถูกอัปขึ้น repo
-            โดยอัตโนมัติ
-          </p>
-        </article>
-        <article className="assurance-card">
-          <p className="eyebrow">Storage Health</p>
-          <h3>{storageSummary.title}</h3>
-          <p>{storageSummary.detail}</p>
-          <small>กำลังใช้ {STORAGE_MODE_LABEL[storageMode] ?? storageMode}</small>
-        </article>
-        <article className="assurance-card">
-          <p className="eyebrow">Backup Rhythm</p>
-          <h3>{backupStatus}</h3>
-          <p>ก่อนล้างเครื่อง เปลี่ยนเบราว์เซอร์ หรือย้ายไปอุปกรณ์ใหม่ ให้ส่งออกแบ็กอัปก่อนทุกครั้ง</p>
+          <span>เฉลี่ย</span>
         </article>
       </section>
 
       {needsBackupReminder ? (
-        <section className="backup-reminder" aria-live="polite">
+        <section className="backup-reminder compact-reminder" aria-live="polite">
           <div className="backup-reminder-copy">
-            <p className="eyebrow">Daily Reminder</p>
             <h3>วันนี้ยังไม่ได้สำรองข้อมูล</h3>
-            <p>ถ้าต่อเน็ตอยู่ กดแชร์แบ็กอัปเพื่อส่งเข้า Files หรือ Google Drive ได้เลย</p>
+            <p>กดแบ็กอัปเพื่อส่งเข้า Files หรือ Google Drive ได้เลย</p>
           </div>
           <div className="backup-reminder-actions">
             <button type="button" className="ghost-button" onClick={handleDismissBackupReminder}>
-              เตือนพรุ่งนี้
+              พรุ่งนี้
             </button>
             <button type="button" className="primary-button" onClick={handleShareBackup}>
               สำรองตอนนี้
@@ -1059,56 +1041,31 @@ function App() {
         </section>
       ) : null}
 
-      <main className="app-main">
-        <aside className="folder-panel">
-          <div className="panel-header">
-            <p className="eyebrow">Folders</p>
-            <h2>ผังชั้นหนังสือ</h2>
-          </div>
-
-          <nav className="folder-tree">
-            {folderTree.map((folder) => (
-              <button
-                key={folder.id}
-                type="button"
-                className={`folder-item ${folder.id === currentFolderId ? 'active' : ''}`}
-                style={{ '--depth': folder.depth }}
-                onClick={() => setCurrentFolderId(folder.id)}
-              >
-                <span>{folder.name}</span>
-                <small>{books.filter((book) => book.folderId === folder.id).length}</small>
-              </button>
-            ))}
-          </nav>
-
-          <div className="panel-footer">
-            <p>{status}</p>
-          </div>
-        </aside>
-
+      <main className="library-stack">
         <section className="library-panel">
           <div className="panel-header panel-header-spread">
             <div>
-              <p className="eyebrow">Now Browsing</p>
+              <p className="eyebrow">Current Shelf</p>
               <h2>{currentFolder?.name ?? 'กำลังโหลดโฟลเดอร์'}</h2>
-              <div className="breadcrumb">
-                {breadcrumb.map((folder, index) => (
-                  <span key={folder.id}>
-                    {folder.name}
-                    {index < breadcrumb.length - 1 ? ' / ' : ''}
-                  </span>
-                ))}
-              </div>
+              <div className="library-status-line">{status}</div>
             </div>
 
             <div className="folder-actions">
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={handleNavigateUp}
+                disabled={!currentFolder || !currentFolder.parentId}
+              >
+                ขึ้นหนึ่งระดับ
+              </button>
               <select
                 value={prefs.sortBy}
                 onChange={(event) => syncPrefs({ ...prefs, sortBy: event.target.value })}
               >
-                <option value="recent">เรียงตามล่าสุด</option>
-                <option value="title">เรียงตามชื่อ</option>
-                <option value="progress">เรียงตามความคืบหน้า</option>
+                <option value="recent">ล่าสุด</option>
+                <option value="title">ตามชื่อ</option>
+                <option value="progress">ตามความคืบหน้า</option>
               </select>
               <button type="button" className="ghost-button" onClick={() => openFolderEditor('create')}>
                 โฟลเดอร์ย่อย
@@ -1129,65 +1086,66 @@ function App() {
               >
                 ลบโฟลเดอร์
               </button>
+              <button type="button" className="ghost-button" onClick={() => backupInputRef.current?.click()}>
+                กู้คืน
+              </button>
             </div>
           </div>
 
-          <section className="recent-section">
-            <div className="section-heading">
-              <p className="eyebrow">Continue Reading</p>
-              <h3>เล่มที่กำลังอ่านต่อ</h3>
-            </div>
-            <div className="recent-row">
-              {recentBooks.length ? (
-                recentBooks.map((book) => (
-                  <button
-                    key={book.id}
-                    type="button"
-                    className="recent-card"
-                    onClick={() => handleOpenBook(book.id)}
-                  >
-                    <strong>{book.title}</strong>
-                    <p>{trimText(book.excerpt, 90)}</p>
-                    <div className="recent-meta">
-                      <span>{book.progress ?? 0}%</span>
-                      <small>{formatCompactDate(book.lastOpenedAt)}</small>
-                    </div>
-                  </button>
-                ))
-              ) : (
-                <div className="placeholder-card">ยังไม่มีเล่มที่เปิดอ่านล่าสุด</div>
-              )}
-            </div>
-          </section>
+          {latestReadingBook ? (
+            <section className="recent-section">
+              <div className="section-heading">
+                <p className="eyebrow">Continue</p>
+                <h3>กลับไปเล่มล่าสุด</h3>
+              </div>
+              <button
+                type="button"
+                className="continue-strip"
+                onClick={() => handleOpenBook(latestReadingBook.id)}
+              >
+                <div>
+                  <strong>{latestReadingBook.title}</strong>
+                  <p>{trimText(latestReadingBook.excerpt, 120)}</p>
+                </div>
+                <span>{latestReadingBook.progress ?? 0}%</span>
+              </button>
+            </section>
+          ) : null}
 
           <section className="subfolder-section">
             <div className="section-heading">
-              <p className="eyebrow">Subfolders</p>
-              <h3>โฟลเดอร์ย่อยในชั้นนี้</h3>
+              <p className="eyebrow">Folder Shelf</p>
+              <h3>โฟลเดอร์บนชั้นนี้</h3>
             </div>
-            <div className="folder-grid">
-              {childFolders.length ? (
-                childFolders.map((folder) => (
-                  <button
-                    key={folder.id}
-                    type="button"
-                    className="folder-card"
-                    onClick={() => setCurrentFolderId(folder.id)}
-                  >
-                    <strong>{folder.name}</strong>
-                    <p>{books.filter((book) => book.folderId === folder.id).length} เล่มในโฟลเดอร์นี้</p>
-                  </button>
-                ))
-              ) : (
-                <div className="placeholder-card">ยังไม่มีโฟลเดอร์ย่อยในชั้นนี้</div>
-              )}
-            </div>
+            {childFolders.length ? (
+              <div className="folder-bookshelf">
+                <div className="folder-book-row">
+                  {childFolders.map((folder, index) => (
+                    <button
+                      key={folder.id}
+                      type="button"
+                      className={`folder-book folder-tone-${index % 4}`}
+                      onClick={() => setCurrentFolderId(folder.id)}
+                    >
+                      <span className="folder-book-spine">{folder.name}</span>
+                      <div className="folder-book-front">
+                        <strong>{folder.name}</strong>
+                        <small>{books.filter((book) => book.folderId === folder.id).length} เล่ม</small>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+                <div className="shelf-plank-block" />
+              </div>
+            ) : (
+              <div className="placeholder-card">ยังไม่มีโฟลเดอร์ย่อยในชั้นนี้</div>
+            )}
           </section>
 
           <section className="book-section">
             <div className="section-heading">
-              <p className="eyebrow">Shelf</p>
-              <h3>หนังสือในโฟลเดอร์นี้</h3>
+              <p className="eyebrow">Books</p>
+              <h3>ไฟล์ในโฟลเดอร์นี้</h3>
             </div>
 
             {isBooting ? (
@@ -1243,6 +1201,43 @@ function App() {
           </section>
         </section>
       </main>
+
+      {helpOpen ? (
+        <div className="modal-overlay" onClick={() => setHelpOpen(false)}>
+          <div className="modal-card help-card" onClick={(event) => event.stopPropagation()}>
+            <p className="eyebrow">Quick Guide</p>
+            <h3>วิธีใช้แบบสั้นที่สุด</h3>
+            <div className="help-list">
+              <article>
+                <strong>เพิ่มโฟลเดอร์</strong>
+                <p>กด “เพิ่มโฟลเดอร์” แล้วกดเข้าไปในชั้นนั้นเพื่อดูโฟลเดอร์ย่อยหรือไฟล์</p>
+              </article>
+              <article>
+                <strong>เพิ่มไฟล์อ่าน</strong>
+                <p>กด “เพิ่มหนังสือ” แล้วเลือกไฟล์ .md จากเครื่องของคุณ ข้อมูลจะอยู่ในเครื่องนี้เท่านั้น</p>
+              </article>
+              <article>
+                <strong>สำรองข้อมูล</strong>
+                <p>กด “แบ็กอัป” เพื่อแชร์ไป Files หรือ Google Drive หรือใช้ไฟล์แบ็กอัปไว้กู้คืน</p>
+              </article>
+              <article>
+                <strong>กู้คืนข้อมูล</strong>
+                <p>กด “กู้คืน” แล้วเลือกไฟล์แบ็กอัปเก่าเพื่อเอาคลังหนังสือกลับมา</p>
+              </article>
+              <article>
+                <strong>โหมดจัดเก็บ</strong>
+                <p>{storageSummary.detail}</p>
+                <small>สถานะล่าสุด: {backupStatus}</small>
+              </article>
+            </div>
+            <div className="modal-actions">
+              <button type="button" className="primary-button" onClick={() => setHelpOpen(false)}>
+                ปิด
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {view === 'reader' && activeBook ? (
         <div className="reader-overlay">
