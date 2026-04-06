@@ -189,6 +189,46 @@ select {
   font-size: 0.92rem;
 }
 
+.assurance-strip {
+  margin-top: 1rem;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.9rem;
+}
+
+.assurance-card {
+  padding: 1.1rem 1.15rem;
+  border-radius: 22px;
+  background: rgba(255, 252, 246, 0.68);
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  box-shadow: var(--shadow-soft);
+}
+
+.assurance-card h3 {
+  margin: 0.35rem 0 0.55rem;
+  font-family: 'Playfair Display', serif;
+  font-size: clamp(1.2rem, 1.8vw, 1.55rem);
+  line-height: 1.08;
+}
+
+.assurance-card p {
+  margin: 0;
+  color: var(--ink-soft);
+  line-height: 1.65;
+}
+
+.assurance-card small {
+  display: inline-flex;
+  margin-top: 0.85rem;
+  padding: 0.35rem 0.65rem;
+  border-radius: 999px;
+  background: rgba(212, 139, 23, 0.12);
+  color: var(--wood-mid);
+  font-family: 'DM Mono', monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+}
+
 .app-main {
   margin-top: 1.2rem;
   display: grid;
@@ -785,6 +825,10 @@ select {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
+  .assurance-strip {
+    grid-template-columns: 1fr;
+  }
+
   .recent-row,
   .folder-grid,
   .book-grid {
@@ -850,6 +894,7 @@ select {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .assurance-strip,
   .folder-tree,
   .recent-row,
   .folder-grid,

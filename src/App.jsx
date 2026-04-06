@@ -19,6 +19,38 @@ const EMPTY_PASSAGE = {
   heading: 'พร้อมอ่าน',
   excerpt: 'เริ่มเลื่อนอ่าน แล้วระบบจะจำตำแหน่งล่าสุดและช่วยคุณกลับมาจุดเดิมได้',
 }
+const STARTER_GUIDE_MARKDOWN = `# Welcome Guide
+
+ReadShelf Personal เวอร์ชันนี้ออกแบบมาให้ใช้เหมือนแอปส่วนตัวบน iPad โดยตรง
+
+## ข้อมูลของคุณอยู่ที่ไหน
+
+- ตัวโปรแกรมเปิดผ่าน GitHub Pages ได้
+- แต่หนังสือที่คุณ import, โฟลเดอร์, progress, และ bookmark จะเก็บอยู่ในเบราว์เซอร์ของเครื่องนี้เท่านั้น
+- ถ้าเปิดลิงก์เดียวกันจากเครื่องอื่น จะไม่เห็นหนังสือส่วนตัวของคุณ
+
+## เริ่มต้นใช้งาน
+
+1. กดปุ่ม **เพิ่มหนังสือ**
+2. เลือกไฟล์ .md จากเครื่องของคุณ
+3. ถ้าต้องการจัดหมวด ให้สร้างโฟลเดอร์ก่อนแล้วค่อย import
+
+## สิ่งสำคัญที่ควรจำ
+
+- ถ้าล้างข้อมูลเว็บไซต์ของเบราว์เซอร์ ข้อมูลในเครื่องนี้อาจหาย
+- ควรใช้ปุ่ม **ส่งออกแบ็กอัป** เป็นระยะ
+- ถ้าต้องการย้ายไปเครื่องใหม่ ให้ใช้ไฟล์แบ็กอัปแล้วค่อย **นำเข้าแบ็กอัป**
+
+## ใช้บน iPad ให้ลื่นที่สุด
+
+- เปิดผ่าน Safari
+- กด Share > Add to Home Screen
+- ใช้แนวตั้งตอนอ่านยาว และแนวนอนตอนจัดโฟลเดอร์หรือเลือกหนังสือ
+`
+const STORAGE_MODE_LABEL = {
+  indexedDB: 'IndexedDB',
+  localStorage: 'localStorage',
+}
 
 function createId(prefix) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
@@ -32,6 +64,26 @@ function createDefaultFolder() {
     createdAt: Date.now(),
     updatedAt: Date.now(),
     fixed: true,
+  }
+}
+
+function createStarterBook(fontSize) {
+  const content = STARTER_GUIDE_MARKDOWN
+
+  return {
+    id: createId('book'),
+    title: 'Welcome Guide',
+    fileName: 'welcome.md',
+    folderId: DEFAULT_FOLDER_ID,
+    content,
+    excerpt: extractLead(content),
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    lastOpenedAt: null,
+    lastReadAt: null,
+    progress: 0,
+    readerFontSize: fontSize ?? defaultPrefs.fontSize,
+    bookmarks: [],
   }
 }
 
@@ -274,6 +326,28 @@ function App() {
     }
   }, [books, folders.length])
 
+  const backupStatus = useMemo(() => {
+    if (!prefs.lastBackupAt) {
+      return 'ยังไม่เคยส่งออกแบ็กอัป'
+    }
+
+    return `สำรองล่าสุด ${formatDate(prefs.lastBackupAt)}`
+  }, [prefs.lastBackupAt])
+
+  const storageSummary = useMemo(() => {
+    if (storageMode === 'localStorage') {
+      return {
+        title: 'โหมดสำรอง',
+        detail: 'เบราว์เซอร์นี้ใช้ localStorage อยู่ จึงควรแบ็กอัปบ่อยกว่าปกติ',
+      }
+    }
+
+    return {
+      title: 'โหมดหลัก',
+      detail: 'เบราว์เซอร์นี้เก็บข้อมูลใน IndexedDB เพื่อรองรับหนังสือและโฟลเดอร์ได้มากกว่าเดิม',
+    }
+  }, [storageMode])
+
   useEffect(() => {
     let active = true
 
@@ -296,33 +370,9 @@ function App() {
       }
 
       if (!nextBooks.length) {
-        try {
-          const response = await fetch(`${import.meta.env.BASE_URL}docs/welcome.md`)
-
-          if (response.ok) {
-            const content = await response.text()
-            const seedBook = {
-              id: createId('book'),
-              title: 'Welcome Guide',
-              fileName: 'welcome.md',
-              folderId: DEFAULT_FOLDER_ID,
-              content,
-              excerpt: extractLead(content),
-              createdAt: Date.now(),
-              updatedAt: Date.now(),
-              lastOpenedAt: null,
-              lastReadAt: null,
-              progress: 0,
-              readerFontSize: snapshot.prefs.fontSize ?? defaultPrefs.fontSize,
-              bookmarks: [],
-            }
-
-            nextBooks = [seedBook]
-            await putBook(seedBook)
-          }
-        } catch {
-          nextBooks = []
-        }
+        const seedBook = createStarterBook(snapshot.prefs.fontSize ?? defaultPrefs.fontSize)
+        nextBooks = [seedBook]
+        await putBook(seedBook)
       }
 
       setFolders(nextFolders)
@@ -666,12 +716,16 @@ function App() {
   }
 
   async function handleExportBackup() {
+    const nextPrefs = {
+      ...prefs,
+      lastBackupAt: Date.now(),
+    }
     const payload = {
       version: 1,
       exportedAt: Date.now(),
       folders,
       books,
-      prefs,
+      prefs: nextPrefs,
     }
 
     const blob = new Blob([JSON.stringify(payload, null, 2)], {
@@ -684,7 +738,10 @@ function App() {
     anchor.download = `readshelf-backup-${new Date().toISOString().slice(0, 10)}.json`
     anchor.click()
     URL.revokeObjectURL(url)
+    setPrefs(nextPrefs)
+    await putPrefs(nextPrefs)
     showToast('ส่งออกแบ็กอัปแล้ว')
+    setStatus('สำรองข้อมูลของเครื่องนี้เรียบร้อยแล้ว')
   }
 
   async function handleImportBackup(event) {
@@ -863,8 +920,30 @@ function App() {
           <span>เฉลี่ยความคืบหน้า</span>
         </article>
         <article className="stat-card">
-          <strong>{storageMode}</strong>
+          <strong>{STORAGE_MODE_LABEL[storageMode] ?? storageMode}</strong>
           <span>โหมดจัดเก็บ</span>
+        </article>
+      </section>
+
+      <section className="assurance-strip">
+        <article className="assurance-card">
+          <p className="eyebrow">Private by Device</p>
+          <h3>หนังสือที่ import จะอยู่ในเครื่องนี้เท่านั้น</h3>
+          <p>
+            ตัวแอปเปิดจาก GitHub ได้ แต่หนังสือ โฟลเดอร์ และตำแหน่งที่อ่านจะไม่ถูกอัปขึ้น repo
+            โดยอัตโนมัติ
+          </p>
+        </article>
+        <article className="assurance-card">
+          <p className="eyebrow">Storage Health</p>
+          <h3>{storageSummary.title}</h3>
+          <p>{storageSummary.detail}</p>
+          <small>กำลังใช้ {STORAGE_MODE_LABEL[storageMode] ?? storageMode}</small>
+        </article>
+        <article className="assurance-card">
+          <p className="eyebrow">Backup Rhythm</p>
+          <h3>{backupStatus}</h3>
+          <p>ก่อนล้างเครื่อง เปลี่ยนเบราว์เซอร์ หรือย้ายไปอุปกรณ์ใหม่ ให้ส่งออกแบ็กอัปก่อนทุกครั้ง</p>
         </article>
       </section>
 

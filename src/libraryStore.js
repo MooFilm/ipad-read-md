@@ -8,6 +8,7 @@ const FALLBACK_KEY = 'readshelf-personal-fallback'
 const defaultPrefs = {
   sortBy: 'recent',
   fontSize: 18,
+  lastBackupAt: null,
 }
 
 let dbPromise = null
