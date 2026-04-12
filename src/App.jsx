@@ -293,6 +293,8 @@ function App() {
   const saveTimerRef = useRef(null)
   const scrollFrameRef = useRef(null)
   const lastScrollSampleRef = useRef(0)
+  const lastPassageSampleRef = useRef(0)
+  const lastProgressRef = useRef(0)
   const toastTimerRef = useRef(null)
 
   const folderMap = useMemo(
@@ -460,6 +462,9 @@ function App() {
       return
     }
 
+    lastScrollSampleRef.current = 0
+    lastPassageSampleRef.current = 0
+    lastProgressRef.current = activeBook.progress ?? 0
     setReaderProgress(activeBook.progress ?? 0)
     setReaderPassage(EMPTY_PASSAGE)
     setBookmarkPanelOpen(false)
@@ -477,7 +482,7 @@ function App() {
     })
 
     return () => cancelAnimationFrame(frame)
-  }, [activeBook, view])
+  }, [activeBookId, view])
 
   useEffect(() => {
     if (view !== 'reader' || !activeBook) {
@@ -500,7 +505,7 @@ function App() {
 
         const now = window.performance.now()
 
-        if (now - lastScrollSampleRef.current < 72) {
+        if (now - lastScrollSampleRef.current < 120) {
           return
         }
 
@@ -508,21 +513,27 @@ function App() {
 
         const max = Math.max(scroller.scrollHeight - scroller.clientHeight, 1)
         const progress = Math.round((scroller.scrollTop / max) * 100)
-        const passage = detectCurrentPassage(articleRef.current, scroller)
 
-        setReaderProgress(progress)
-        setReaderPassage(passage)
+        if (progress !== lastProgressRef.current) {
+          lastProgressRef.current = progress
+          setReaderProgress(progress)
+        }
+
+        if (now - lastPassageSampleRef.current > 420) {
+          lastPassageSampleRef.current = now
+          setReaderPassage(detectCurrentPassage(articleRef.current, scroller))
+        }
 
         if (saveTimerRef.current) {
           window.clearTimeout(saveTimerRef.current)
         }
 
         saveTimerRef.current = window.setTimeout(() => {
-          updateBook(activeBook.id, {
+          updateBook(activeBookId, {
             progress,
             lastReadAt: Date.now(),
           })
-        }, 220)
+        }, 900)
       })
     }
 
@@ -545,7 +556,7 @@ function App() {
         window.clearTimeout(saveTimerRef.current)
       }
     }
-  }, [view, activeBook])
+  }, [view, activeBookId])
 
   async function syncPrefs(nextPrefs) {
     setPrefs(nextPrefs)
