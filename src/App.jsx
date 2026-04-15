@@ -914,12 +914,18 @@ function App() {
       return
     }
 
+    const scroller = readerScrollRef.current
+    const max = scroller ? Math.max(scroller.scrollHeight - scroller.clientHeight, 1) : 1
+    const liveProgress = scroller ? Math.round((scroller.scrollTop / max) * 100) : readerProgress
+    const livePassage = scroller ? detectCurrentPassage(articleRef.current, scroller) : readerPassage
+
     const nextBookmarks = [
       {
         id: createId('bookmark'),
-        progress: readerProgress,
-        excerpt: readerPassage.excerpt || `ตำแหน่ง ${readerProgress}%`,
-        heading: readerPassage.heading,
+        progress: liveProgress,
+        passageIndex: livePassage.index,
+        excerpt: livePassage.excerpt || `ตำแหน่ง ${liveProgress}%`,
+        heading: livePassage.heading,
         createdAt: Date.now(),
       },
       ...(activeBook.bookmarks ?? []),
@@ -928,18 +934,36 @@ function App() {
     await updateBook(activeBook.id, {
       bookmarks: nextBookmarks,
     })
+    setReaderProgress(liveProgress)
+    setReaderPassage(livePassage)
     showToast('เพิ่มบุ๊กมาร์กแล้ว')
   }
 
-  function jumpToProgress(progress) {
+  function jumpToBookmark(bookmark) {
     const scroller = readerScrollRef.current
 
     if (!scroller) {
       return
     }
 
+    const nodes = getPassageNodes(articleRef.current)
+    const targetNode =
+      Number.isInteger(bookmark.passageIndex) && bookmark.passageIndex >= 0
+        ? nodes[bookmark.passageIndex]
+        : null
     const max = Math.max(scroller.scrollHeight - scroller.clientHeight, 1)
-    scroller.scrollTo({ top: (progress / 100) * max, behavior: 'smooth' })
+
+    if (targetNode) {
+      const scrollerRect = scroller.getBoundingClientRect()
+      const targetRect = targetNode.getBoundingClientRect()
+      const targetTop = Math.max(0, scroller.scrollTop + (targetRect.top - scrollerRect.top) - 18)
+      scroller.scrollTo({ top: targetTop, behavior: 'smooth' })
+      setReaderPassage(getPassageSnapshot(articleRef.current, bookmark.passageIndex))
+      setReaderProgress(Math.round((targetTop / max) * 100))
+    } else {
+      scroller.scrollTo({ top: ((bookmark.progress ?? 0) / 100) * max, behavior: 'smooth' })
+    }
+
     setBookmarkPanelOpen(false)
   }
 
@@ -1331,7 +1355,7 @@ function App() {
                   {(activeBook.bookmarks ?? []).length ? (
                     activeBook.bookmarks.map((bookmark) => (
                       <article key={bookmark.id} className="bookmark-item">
-                        <button type="button" className="bookmark-open" onClick={() => jumpToProgress(bookmark.progress)}>
+                        <button type="button" className="bookmark-open" onClick={() => jumpToBookmark(bookmark)}>
                           <strong>{bookmark.heading}</strong>
                           <p>{bookmark.excerpt}</p>
                           <small>{bookmark.progress}% • {formatDate(bookmark.createdAt)}</small>
