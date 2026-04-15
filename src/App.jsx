@@ -19,6 +19,7 @@ const EMPTY_PASSAGE = {
   heading: 'พร้อมอ่าน',
   excerpt: 'เริ่มเลื่อนอ่าน แล้วระบบจะจำตำแหน่งล่าสุดและช่วยคุณกลับมาจุดเดิมได้',
 }
+const BOOKMARK_JUMP_OFFSET = 18
 const STARTER_GUIDE_MARKDOWN = `# Welcome Guide
 
 ReadShelf Personal เวอร์ชันนี้ออกแบบมาให้ใช้เหมือนแอปส่วนตัวบน iPad โดยตรง
@@ -915,9 +916,15 @@ function App() {
     }
 
     const scroller = readerScrollRef.current
-    const max = scroller ? Math.max(scroller.scrollHeight - scroller.clientHeight, 1) : 1
-    const liveProgress = scroller ? Math.round((scroller.scrollTop / max) * 100) : readerProgress
-    const livePassage = scroller ? detectCurrentPassage(articleRef.current, scroller) : readerPassage
+
+    if (!scroller) {
+      showToast('ยังไม่พร้อมมาร์ก กรุณาลองอีกครั้ง')
+      return
+    }
+
+    const max = Math.max(scroller.scrollHeight - scroller.clientHeight, 1)
+    const liveProgress = Math.round((scroller.scrollTop / max) * 100)
+    const livePassage = detectCurrentPassage(articleRef.current, scroller)
 
     const nextBookmarks = [
       {
@@ -956,12 +963,15 @@ function App() {
     if (targetNode) {
       const scrollerRect = scroller.getBoundingClientRect()
       const targetRect = targetNode.getBoundingClientRect()
-      const targetTop = Math.max(0, scroller.scrollTop + (targetRect.top - scrollerRect.top) - 18)
+      const targetTop = Math.max(0, scroller.scrollTop + (targetRect.top - scrollerRect.top) - BOOKMARK_JUMP_OFFSET)
       scroller.scrollTo({ top: targetTop, behavior: 'smooth' })
       setReaderPassage(getPassageSnapshot(articleRef.current, bookmark.passageIndex))
       setReaderProgress(Math.round((targetTop / max) * 100))
     } else {
-      scroller.scrollTo({ top: ((bookmark.progress ?? 0) / 100) * max, behavior: 'smooth' })
+      const fallbackProgress = Number.isFinite(bookmark.progress) ? bookmark.progress : readerProgress
+      scroller.scrollTo({ top: (fallbackProgress / 100) * max, behavior: 'smooth' })
+      setReaderProgress(fallbackProgress)
+      setReaderPassage(detectCurrentPassage(articleRef.current, scroller))
     }
 
     setBookmarkPanelOpen(false)
