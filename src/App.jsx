@@ -19,6 +19,7 @@ const EMPTY_PASSAGE = {
   heading: 'พร้อมอ่าน',
   excerpt: 'เริ่มเลื่อนอ่าน แล้วระบบจะจำตำแหน่งล่าสุดและช่วยคุณกลับมาจุดเดิมได้',
 }
+const BOOKMARK_JUMP_OFFSET = 18
 const STARTER_GUIDE_MARKDOWN = `# Welcome Guide
 
 ReadShelf Personal เวอร์ชันนี้ออกแบบมาให้ใช้เหมือนแอปส่วนตัวบน iPad โดยตรง
@@ -914,12 +915,24 @@ function App() {
       return
     }
 
+    const scroller = readerScrollRef.current
+
+    if (!scroller) {
+      showToast('ยังไม่พร้อมมาร์ก กรุณาลองอีกครั้ง')
+      return
+    }
+
+    const max = Math.max(scroller.scrollHeight - scroller.clientHeight, 1)
+    const liveProgress = Math.round((scroller.scrollTop / max) * 100)
+    const livePassage = detectCurrentPassage(articleRef.current, scroller)
+
     const nextBookmarks = [
       {
         id: createId('bookmark'),
-        progress: readerProgress,
-        excerpt: readerPassage.excerpt || `ตำแหน่ง ${readerProgress}%`,
-        heading: readerPassage.heading,
+        progress: liveProgress,
+        passageIndex: livePassage.index,
+        excerpt: livePassage.excerpt || `ตำแหน่ง ${liveProgress}%`,
+        heading: livePassage.heading,
         createdAt: Date.now(),
       },
       ...(activeBook.bookmarks ?? []),
@@ -928,18 +941,39 @@ function App() {
     await updateBook(activeBook.id, {
       bookmarks: nextBookmarks,
     })
+    setReaderProgress(liveProgress)
+    setReaderPassage(livePassage)
     showToast('เพิ่มบุ๊กมาร์กแล้ว')
   }
 
-  function jumpToProgress(progress) {
+  function jumpToBookmark(bookmark) {
     const scroller = readerScrollRef.current
 
     if (!scroller) {
       return
     }
 
+    const nodes = getPassageNodes(articleRef.current)
+    const targetNode =
+      Number.isInteger(bookmark.passageIndex) && bookmark.passageIndex >= 0
+        ? nodes[bookmark.passageIndex]
+        : null
     const max = Math.max(scroller.scrollHeight - scroller.clientHeight, 1)
-    scroller.scrollTo({ top: (progress / 100) * max, behavior: 'smooth' })
+
+    if (targetNode) {
+      const scrollerRect = scroller.getBoundingClientRect()
+      const targetRect = targetNode.getBoundingClientRect()
+      const targetTop = Math.max(0, scroller.scrollTop + (targetRect.top - scrollerRect.top) - BOOKMARK_JUMP_OFFSET)
+      scroller.scrollTo({ top: targetTop, behavior: 'smooth' })
+      setReaderPassage(getPassageSnapshot(articleRef.current, bookmark.passageIndex))
+      setReaderProgress(Math.round((targetTop / max) * 100))
+    } else {
+      const fallbackProgress = Number.isFinite(bookmark.progress) ? bookmark.progress : readerProgress
+      scroller.scrollTo({ top: (fallbackProgress / 100) * max, behavior: 'smooth' })
+      setReaderProgress(fallbackProgress)
+      setReaderPassage(detectCurrentPassage(articleRef.current, scroller))
+    }
+
     setBookmarkPanelOpen(false)
   }
 
@@ -1331,7 +1365,7 @@ function App() {
                   {(activeBook.bookmarks ?? []).length ? (
                     activeBook.bookmarks.map((bookmark) => (
                       <article key={bookmark.id} className="bookmark-item">
-                        <button type="button" className="bookmark-open" onClick={() => jumpToProgress(bookmark.progress)}>
+                        <button type="button" className="bookmark-open" onClick={() => jumpToBookmark(bookmark)}>
                           <strong>{bookmark.heading}</strong>
                           <p>{bookmark.excerpt}</p>
                           <small>{bookmark.progress}% • {formatDate(bookmark.createdAt)}</small>
