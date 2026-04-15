@@ -135,7 +135,7 @@ function stripExtension(name) {
 }
 
 function getFileExtension(name) {
-  const match = name.toLowerCase().match(/\.([a-z0-9]+)$/)
+  const match = name.toLowerCase().match(/\.([a-z]+)$/)
   return match?.[1] ?? ''
 }
 
