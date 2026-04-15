@@ -196,6 +196,9 @@ async function extractBookContent(file) {
   if (extension === 'docx') {
     const arrayBuffer = await file.arrayBuffer()
     const result = await mammoth.extractRawText({ arrayBuffer })
+    if (result.messages?.length) {
+      console.warn('Word extraction warnings', file.name, result.messages)
+    }
 
     return {
       content: result.value ?? '',
@@ -718,7 +721,7 @@ function App() {
             return { type: 'unsupported', fileName: file.name }
           }
 
-          if (!hasMinimumContent(content, 1)) {
+          if (!hasMinimumContent(content)) {
             return { type: 'empty', fileName: file.name, typeLabel }
           }
 
