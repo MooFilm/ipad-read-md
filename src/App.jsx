@@ -169,7 +169,11 @@ async function extractPdfText(file) {
       }
     })
 
-    const pageText = segments.join('').replace(/\s+/g, ' ').trim()
+    const pageText = segments
+      .join('')
+      .replace(/[ \t\f\v\r]+/g, ' ')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim()
 
     if (pageText) {
       pages.push(pageText)
@@ -245,6 +249,11 @@ function trimText(text, maxLength = 120) {
   return normalized.length <= maxLength
     ? normalized
     : `${normalized.slice(0, maxLength).trimEnd()}...`
+}
+
+function hasMinimumContent(text, minLength = 1) {
+  const compact = (text ?? '').replace(/\s+/g, '')
+  return compact.length >= minLength
 }
 
 function getPassageNodes(article) {
@@ -709,7 +718,7 @@ function App() {
             return { type: 'unsupported', fileName: file.name }
           }
 
-          if (!trimText(content, 1)) {
+          if (!hasMinimumContent(content, 1)) {
             return { type: 'empty', fileName: file.name, typeLabel }
           }
 
