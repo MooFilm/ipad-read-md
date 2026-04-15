@@ -148,11 +148,28 @@ async function extractPdfText(file) {
   for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
     const page = await pdfDocument.getPage(pageNumber)
     const textContent = await page.getTextContent()
-    const pageText = textContent.items
-      .map((item) => ('str' in item ? item.str : ''))
-      .join(' ')
-      .replace(/\s+/g, ' ')
-      .trim()
+    const segments = []
+
+    textContent.items.forEach((item) => {
+      if (!('str' in item) || !item.str) {
+        return
+      }
+
+      const previous = segments.length ? segments[segments.length - 1] : ''
+      const shouldAddSpace =
+        previous &&
+        !/\s$/.test(previous) &&
+        !/^[,.;:!?)}\]]/.test(item.str) &&
+        !/[({[]$/.test(previous)
+
+      segments.push(`${shouldAddSpace ? ' ' : ''}${item.str}`)
+
+      if (item.hasEOL) {
+        segments.push('\n')
+      }
+    })
+
+    const pageText = segments.join('').replace(/\s+/g, ' ').trim()
 
     if (pageText) {
       pages.push(pageText)
@@ -714,7 +731,8 @@ function App() {
               bookmarks: [],
             },
           }
-        } catch {
+        } catch (error) {
+          console.warn('ไม่สามารถอ่านไฟล์ได้', file.name, error)
           return { type: 'error', fileName: file.name }
         }
       }),
