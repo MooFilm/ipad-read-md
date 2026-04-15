@@ -254,9 +254,9 @@ function trimText(text, maxLength = 120) {
     : `${normalized.slice(0, maxLength).trimEnd()}...`
 }
 
-function hasMinimumContent(text, minLength = 1) {
+function hasMinimumContent(text, minNonWhitespaceChars = 1) {
   const compact = (text ?? '').replace(/\s+/g, '')
-  return compact.length >= minLength
+  return compact.length >= minNonWhitespaceChars
 }
 
 function getPassageNodes(article) {
@@ -744,7 +744,7 @@ function App() {
             },
           }
         } catch (error) {
-          console.warn('ไม่สามารถอ่านไฟล์ได้', file.name, error)
+          console.warn('Failed to read file', file.name, error)
           return { type: 'error', fileName: file.name }
         }
       }),
