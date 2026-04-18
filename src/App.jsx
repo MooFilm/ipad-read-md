@@ -17,6 +17,7 @@ const DEFAULT_REMOTE_REPO = {
   owner: 'MooFilm',
   repo: 'ipad-read-md',
 }
+const ALLOWED_COVER_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
 const PASSAGE_SELECTOR = 'h1, h2, h3, h4, p, li, blockquote, pre'
 const EMPTY_PASSAGE = {
   index: 0,
@@ -297,7 +298,7 @@ async function fetchRemoteDocsList() {
   const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/public/docs`)
 
   if (!response.ok) {
-    throw new Error(`โหลด public/docs ไม่สำเร็จ (${response.status})`)
+    throw new Error(`Unable to load public/docs from ${owner}/${repo} (HTTP ${response.status}) / ไม่สามารถโหลด public/docs`)
   }
 
   const payload = await response.json()
@@ -326,6 +327,61 @@ function readFileAsDataUrl(file) {
     reader.onerror = () => reject(reader.error)
     reader.readAsDataURL(file)
   })
+}
+
+function hasValidImageSignature(mimeType, bytes) {
+  if (mimeType === 'image/png') {
+    return bytes.length > 7 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47
+  }
+
+  if (mimeType === 'image/jpeg') {
+    return bytes.length > 2 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
+  }
+
+  if (mimeType === 'image/gif') {
+    const header = String.fromCharCode(...bytes.slice(0, 6))
+    return header === 'GIF87a' || header === 'GIF89a'
+  }
+
+  if (mimeType === 'image/webp') {
+    const riff = String.fromCharCode(...bytes.slice(0, 4))
+    const webp = String.fromCharCode(...bytes.slice(8, 12))
+    return riff === 'RIFF' && webp === 'WEBP'
+  }
+
+  return false
+}
+
+function normalizeCoverImage(value) {
+  if (typeof value !== 'string') {
+    return ''
+  }
+
+  const match = value.match(/^data:(image\/(?:png|jpeg|webp|gif));base64,([a-z0-9+/=]+)$/i)
+
+  if (!match) {
+    return ''
+  }
+
+  const mimeType = match[1].toLowerCase()
+
+  if (!ALLOWED_COVER_MIME_TYPES.has(mimeType)) {
+    return ''
+  }
+
+  try {
+    const base64 = match[2]
+    const binary = atob(base64)
+    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
+
+    if (!hasValidImageSignature(mimeType, bytes)) {
+      return ''
+    }
+
+    return `data:${mimeType};base64,${base64}`
+  } catch {
+    return ''
+  }
 }
 
 function App() {
@@ -752,7 +808,16 @@ function App() {
     }
 
     const dataUrl = await readFileAsDataUrl(file)
-    await updateBook(bookCoverTargetId, { coverImage: dataUrl })
+
+    const safeCover = normalizeCoverImage(dataUrl)
+
+    if (!safeCover) {
+      showToast('Only image files are supported / รองรับเฉพาะไฟล์ภาพเท่านั้น')
+      event.target.value = ''
+      return
+    }
+
+    await updateBook(bookCoverTargetId, { coverImage: safeCover })
     showToast('ตั้งปกหนังสือแล้ว')
     setBookCoverTargetId(null)
     event.target.value = ''
@@ -782,7 +847,16 @@ function App() {
     }
 
     const dataUrl = await readFileAsDataUrl(file)
-    await updateFolder(folderCoverTargetId, { coverImage: dataUrl })
+
+    const safeCover = normalizeCoverImage(dataUrl)
+
+    if (!safeCover) {
+      showToast('Only image files are supported / รองรับเฉพาะไฟล์ภาพเท่านั้น')
+      event.target.value = ''
+      return
+    }
+
+    await updateFolder(folderCoverTargetId, { coverImage: safeCover })
     setFolderCoverTargetId(null)
     showToast('ตั้งปกโฟลเดอร์แล้ว')
     event.target.value = ''
@@ -807,7 +881,7 @@ function App() {
       const response = await fetch(doc.downloadUrl)
 
       if (!response.ok) {
-        throw new Error(`โหลดไฟล์ไม่สำเร็จ (${response.status})`)
+        throw new Error(`Unable to load ${doc.name} from ${doc.path} (HTTP ${response.status}) / ไม่สามารถโหลดไฟล์`)
       }
 
       const content = await response.text()
@@ -1397,29 +1471,33 @@ function App() {
             {childFolders.length ? (
               <div className="folder-bookshelf">
                 <div className="folder-book-row">
-                  {childFolders.map((folder, index) => (
-                    <button
-                      key={folder.id}
-                      type="button"
-                      className={`folder-book folder-tone-${index % 4}`}
-                      onClick={() => setCurrentFolderId(folder.id)}
-                    >
-                      <span className="folder-book-spine">{folder.name}</span>
-                      <div
-                        className={`folder-book-front ${folder.coverImage ? 'has-cover' : ''}`}
-                        style={
-                          folder.coverImage
-                            ? {
-                                backgroundImage: `linear-gradient(180deg, rgba(20, 14, 10, 0.18), rgba(20, 14, 10, 0.54)), url(${folder.coverImage})`,
-                              }
-                            : undefined
-                        }
+                  {childFolders.map((folder, index) => {
+                    const folderCover = normalizeCoverImage(folder.coverImage)
+
+                    return (
+                      <button
+                        key={folder.id}
+                        type="button"
+                        className={`folder-book folder-tone-${index % 4}`}
+                        onClick={() => setCurrentFolderId(folder.id)}
                       >
-                        <strong>{folder.name}</strong>
-                        <small>{books.filter((book) => book.folderId === folder.id).length} เล่ม</small>
-                      </div>
-                    </button>
-                  ))}
+                        <span className="folder-book-spine">{folder.name}</span>
+                        <div
+                          className={`folder-book-front ${folderCover ? 'has-cover' : ''}`}
+                          style={
+                            folderCover
+                              ? {
+                                  backgroundImage: `linear-gradient(180deg, rgba(20, 14, 10, 0.18), rgba(20, 14, 10, 0.54)), url(${folderCover})`,
+                                }
+                              : undefined
+                          }
+                        >
+                          <strong>{folder.name}</strong>
+                          <small>{books.filter((book) => book.folderId === folder.id).length} เล่ม</small>
+                        </div>
+                      </button>
+                    )
+                  })}
                 </div>
                 <div className="shelf-plank-block" />
               </div>
@@ -1438,62 +1516,71 @@ function App() {
               <div className="placeholder-card">กำลังเตรียมชั้นหนังสือ...</div>
             ) : folderBooks.length ? (
               <div className="book-grid">
-                {folderBooks.map((book, index) => (
-                  <article key={book.id} className={`book-card tone-${index % 4}`}>
-                    <button type="button" className="book-open" onClick={() => handleOpenBook(book.id)}>
-                      <div className="book-cover">
-                        {book.coverImage ? (
-                          <img src={book.coverImage} alt={`ปก ${book.title}`} className="book-cover-image" />
-                        ) : (
-                          <span className="book-spine">{book.fileName.replace(/\.(md|markdown|txt)$/i, '').slice(0, 18)}</span>
-                        )}
-                      </div>
-                      <div className="book-card-body">
-                        <p className="book-kicker">{formatDate(book.lastOpenedAt)}</p>
-                        <h4>{book.title}</h4>
-                        <p>{trimText(book.excerpt, 120)}</p>
-                        <div className="progress-line">
-                          <span style={{ width: `${book.progress ?? 0}%` }} />
-                        </div>
-                        <div className="book-meta">
-                          <small>{book.bookmarks?.length ?? 0} bookmarks</small>
-                          <strong>{book.progress ?? 0}%</strong>
-                        </div>
-                      </div>
-                    </button>
-                    <button
-                      type="button"
-                      className="book-menu"
-                      onClick={() => setBookActionId((current) => (current === book.id ? null : book.id))}
-                    >
-                      •••
-                    </button>
+                {folderBooks.map((book, index) => {
+                  const safeBookCover = normalizeCoverImage(book.coverImage)
 
-                    {bookActionId === book.id ? (
-                      <div className="book-sheet">
-                        <button type="button" onClick={() => handleOpenBook(book.id)}>
-                          เปิดอ่าน
-                        </button>
-                        <button type="button" onClick={() => pickBookCover(book.id)}>
-                          ตั้งปกไฟล์
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => clearBookCover(book.id)}
-                          disabled={!book.coverImage}
-                        >
-                          ลบปกไฟล์
-                        </button>
-                        <button type="button" onClick={() => setBookMoveId(book.id)}>
-                          ย้ายโฟลเดอร์
-                        </button>
-                        <button type="button" className="danger" onClick={() => handleDeleteBook(book.id)}>
-                          ลบหนังสือ
-                        </button>
-                      </div>
-                    ) : null}
-                  </article>
-                ))}
+                  return (
+                    <article key={book.id} className={`book-card tone-${index % 4}`}>
+                      <button type="button" className="book-open" onClick={() => handleOpenBook(book.id)}>
+                        <div className="book-cover">
+                          {safeBookCover ? (
+                            <div
+                              className="book-cover-image"
+                              role="img"
+                              aria-label={`ปก ${book.title}`}
+                              style={{ backgroundImage: `url(${safeBookCover})` }}
+                            />
+                          ) : (
+                            <span className="book-spine">{book.fileName.replace(/\.(md|markdown|txt)$/i, '').slice(0, 18)}</span>
+                          )}
+                        </div>
+                        <div className="book-card-body">
+                          <p className="book-kicker">{formatDate(book.lastOpenedAt)}</p>
+                          <h4>{book.title}</h4>
+                          <p>{trimText(book.excerpt, 120)}</p>
+                          <div className="progress-line">
+                            <span style={{ width: `${book.progress ?? 0}%` }} />
+                          </div>
+                          <div className="book-meta">
+                            <small>{book.bookmarks?.length ?? 0} bookmarks</small>
+                            <strong>{book.progress ?? 0}%</strong>
+                          </div>
+                        </div>
+                      </button>
+                      <button
+                        type="button"
+                        className="book-menu"
+                        onClick={() => setBookActionId((current) => (current === book.id ? null : book.id))}
+                      >
+                        •••
+                      </button>
+
+                      {bookActionId === book.id ? (
+                        <div className="book-sheet">
+                          <button type="button" onClick={() => handleOpenBook(book.id)}>
+                            เปิดอ่าน
+                          </button>
+                          <button type="button" onClick={() => pickBookCover(book.id)}>
+                            ตั้งปกไฟล์
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => clearBookCover(book.id)}
+                            disabled={!safeBookCover}
+                          >
+                            ลบปกไฟล์
+                          </button>
+                          <button type="button" onClick={() => setBookMoveId(book.id)}>
+                            ย้ายโฟลเดอร์
+                          </button>
+                          <button type="button" className="danger" onClick={() => handleDeleteBook(book.id)}>
+                            ลบหนังสือ
+                          </button>
+                        </div>
+                      ) : null}
+                    </article>
+                  )
+                })}
               </div>
             ) : (
               <div className="placeholder-card">
