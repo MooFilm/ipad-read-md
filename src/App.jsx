@@ -13,6 +13,11 @@ import {
 } from './libraryStore'
 
 const DEFAULT_FOLDER_ID = 'folder-inbox'
+const DEFAULT_REMOTE_REPO = {
+  owner: 'MooFilm',
+  repo: 'ipad-read-md',
+}
+const ALLOWED_COVER_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
 const PASSAGE_SELECTOR = 'h1, h2, h3, h4, p, li, blockquote, pre'
 const EMPTY_PASSAGE = {
   index: 0,
@@ -266,6 +271,119 @@ function fileListToArray(fileList) {
   return Array.from(fileList ?? []).filter((file) => /\.(md|markdown|txt)$/i.test(file.name))
 }
 
+function isMarkdownFileName(name = '') {
+  return /\.(md|markdown|txt)$/i.test(name)
+}
+
+function resolveRemoteRepoFromLocation() {
+  if (typeof window === 'undefined') {
+    return DEFAULT_REMOTE_REPO
+  }
+
+  const hostMatch = window.location.hostname.match(/^([^.]+)\.github\.io$/i)
+  const pathSegment = window.location.pathname.split('/').filter(Boolean)[0]
+
+  if (hostMatch?.[1] && pathSegment) {
+    return {
+      owner: hostMatch[1],
+      repo: pathSegment,
+    }
+  }
+
+  return DEFAULT_REMOTE_REPO
+}
+
+async function fetchRemoteDocsList() {
+  const { owner, repo } = resolveRemoteRepoFromLocation()
+  const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/public/docs`)
+
+  if (!response.ok) {
+    throw new Error(`Unable to load public/docs from ${owner}/${repo} (HTTP ${response.status}) / ไม่สามารถโหลด public/docs`)
+  }
+
+  const payload = await response.json()
+
+  if (!Array.isArray(payload)) {
+    return []
+  }
+
+  return payload
+    .filter((item) => item.type === 'file' && isMarkdownFileName(item.name))
+    .map((item) => ({
+      id: `remote-${item.sha}`,
+      name: item.name,
+      title: stripExtension(item.name),
+      path: item.path,
+      downloadUrl: item.download_url,
+      htmlUrl: item.html_url,
+      sha: item.sha,
+    }))
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result ?? ''))
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(file)
+  })
+}
+
+function hasValidImageSignature(mimeType, bytes) {
+  if (mimeType === 'image/png') {
+    return bytes.length > 7 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47
+  }
+
+  if (mimeType === 'image/jpeg') {
+    return bytes.length > 2 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
+  }
+
+  if (mimeType === 'image/gif') {
+    const header = String.fromCharCode(...bytes.slice(0, 6))
+    return header === 'GIF87a' || header === 'GIF89a'
+  }
+
+  if (mimeType === 'image/webp') {
+    const riff = String.fromCharCode(...bytes.slice(0, 4))
+    const webp = String.fromCharCode(...bytes.slice(8, 12))
+    return riff === 'RIFF' && webp === 'WEBP'
+  }
+
+  return false
+}
+
+function normalizeCoverImage(value) {
+  if (typeof value !== 'string') {
+    return ''
+  }
+
+  const match = value.match(/^data:(image\/(?:png|jpeg|webp|gif));base64,([a-z0-9+/=]+)$/i)
+
+  if (!match) {
+    return ''
+  }
+
+  const mimeType = match[1].toLowerCase()
+
+  if (!ALLOWED_COVER_MIME_TYPES.has(mimeType)) {
+    return ''
+  }
+
+  try {
+    const base64 = match[2]
+    const binary = atob(base64)
+    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
+
+    if (!hasValidImageSignature(mimeType, bytes)) {
+      return ''
+    }
+
+    return `data:${mimeType};base64,${base64}`
+  } catch {
+    return ''
+  }
+}
+
 function App() {
   const [folders, setFolders] = useState([])
   const [books, setBooks] = useState([])
@@ -283,11 +401,19 @@ function App() {
   const [bookMoveId, setBookMoveId] = useState(null)
   const [bookmarkPanelOpen, setBookmarkPanelOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
+  const [activeWebBook, setActiveWebBook] = useState(null)
+  const [remoteDocs, setRemoteDocs] = useState([])
+  const [remoteDocsStatus, setRemoteDocsStatus] = useState('idle')
+  const [remoteDocsError, setRemoteDocsError] = useState('')
   const [readerPassage, setReaderPassage] = useState(EMPTY_PASSAGE)
   const [readerProgress, setReaderProgress] = useState(0)
   const [toastMessage, setToastMessage] = useState('')
+  const [bookCoverTargetId, setBookCoverTargetId] = useState(null)
+  const [folderCoverTargetId, setFolderCoverTargetId] = useState(null)
   const fileInputRef = useRef(null)
   const backupInputRef = useRef(null)
+  const bookCoverInputRef = useRef(null)
+  const folderCoverInputRef = useRef(null)
   const readerScrollRef = useRef(null)
   const articleRef = useRef(null)
   const saveTimerRef = useRef(null)
@@ -306,6 +432,7 @@ function App() {
     () => books.find((book) => book.id === activeBookId) ?? null,
     [books, activeBookId],
   )
+  const readerBook = activeBook ?? activeWebBook
 
   const currentFolder = useMemo(
     () => folders.find((folder) => folder.id === currentFolderId) ?? null,
@@ -440,6 +567,40 @@ function App() {
   }, [])
 
   useEffect(() => {
+    let active = true
+
+    async function loadRemoteDocs() {
+      setRemoteDocsStatus('loading')
+      setRemoteDocsError('')
+
+      try {
+        const docs = await fetchRemoteDocsList()
+
+        if (!active) {
+          return
+        }
+
+        setRemoteDocs(docs)
+        setRemoteDocsStatus('ready')
+      } catch (error) {
+        if (!active) {
+          return
+        }
+
+        setRemoteDocs([])
+        setRemoteDocsStatus('error')
+        setRemoteDocsError(String(error?.message ?? error))
+      }
+    }
+
+    loadRemoteDocs()
+
+    return () => {
+      active = false
+    }
+  }, [])
+
+  useEffect(() => {
     if (toastTimerRef.current) {
       window.clearTimeout(toastTimerRef.current)
     }
@@ -458,14 +619,14 @@ function App() {
   }, [toastMessage])
 
   useEffect(() => {
-    if (!activeBook || view !== 'reader') {
+    if (!readerBook || view !== 'reader') {
       return
     }
 
     lastScrollSampleRef.current = 0
     lastPassageSampleRef.current = 0
-    lastProgressRef.current = activeBook.progress ?? 0
-    setReaderProgress(activeBook.progress ?? 0)
+    lastProgressRef.current = readerBook.progress ?? 0
+    setReaderProgress(readerBook.progress ?? 0)
     setReaderPassage(EMPTY_PASSAGE)
     setBookmarkPanelOpen(false)
 
@@ -477,15 +638,15 @@ function App() {
       }
 
       const max = Math.max(scroller.scrollHeight - scroller.clientHeight, 1)
-      scroller.scrollTop = ((activeBook.progress ?? 0) / 100) * max
+      scroller.scrollTop = ((readerBook.progress ?? 0) / 100) * max
       setReaderPassage(detectCurrentPassage(articleRef.current, scroller))
     })
 
     return () => cancelAnimationFrame(frame)
-  }, [activeBookId, view])
+  }, [activeBookId, view, readerBook])
 
   useEffect(() => {
-    if (view !== 'reader' || !activeBook) {
+    if (view !== 'reader' || !readerBook) {
       return undefined
     }
 
@@ -529,10 +690,12 @@ function App() {
         }
 
         saveTimerRef.current = window.setTimeout(() => {
-          updateBook(activeBookId, {
-            progress,
-            lastReadAt: Date.now(),
-          })
+          if (activeBook) {
+            updateBook(activeBookId, {
+              progress,
+              lastReadAt: Date.now(),
+            })
+          }
         }, 900)
       })
     }
@@ -556,7 +719,7 @@ function App() {
         window.clearTimeout(saveTimerRef.current)
       }
     }
-  }, [view, activeBookId])
+  }, [view, activeBookId, activeBook, readerBook])
 
   async function syncPrefs(nextPrefs) {
     setPrefs(nextPrefs)
@@ -593,8 +756,155 @@ function App() {
     })
   }
 
+  async function updateFolder(folderId, patch) {
+    const target = folders.find((folder) => folder.id === folderId)
+
+    if (!target) {
+      return
+    }
+
+    const nextFolder = {
+      ...target,
+      ...patch,
+      updatedAt: Date.now(),
+    }
+
+    await putFolder(nextFolder)
+    await syncFolders(folders.map((folder) => (folder.id === folderId ? nextFolder : folder)))
+  }
+
+  async function refreshRemoteDocs() {
+    setRemoteDocsStatus('loading')
+    setRemoteDocsError('')
+
+    try {
+      const docs = await fetchRemoteDocsList()
+      setRemoteDocs(docs)
+      setRemoteDocsStatus('ready')
+      showToast(`อัปเดตรายการ public/docs แล้ว ${docs.length} ไฟล์`)
+    } catch (error) {
+      setRemoteDocs([])
+      setRemoteDocsStatus('error')
+      setRemoteDocsError(String(error?.message ?? error))
+      showToast('โหลดรายการ public/docs ไม่สำเร็จ')
+    }
+  }
+
   function showToast(message) {
     setToastMessage(message)
+  }
+
+  function pickBookCover(bookId) {
+    setBookCoverTargetId(bookId)
+    bookCoverInputRef.current?.click()
+  }
+
+  async function handleBookCoverSelected(event) {
+    const file = event.target.files?.[0]
+
+    if (!file || !bookCoverTargetId) {
+      event.target.value = ''
+      return
+    }
+
+    const dataUrl = await readFileAsDataUrl(file)
+
+    const safeCover = normalizeCoverImage(dataUrl)
+
+    if (!safeCover) {
+      showToast('Only image files are supported / รองรับเฉพาะไฟล์ภาพเท่านั้น')
+      event.target.value = ''
+      return
+    }
+
+    await updateBook(bookCoverTargetId, { coverImage: safeCover })
+    showToast('ตั้งปกหนังสือแล้ว')
+    setBookCoverTargetId(null)
+    event.target.value = ''
+  }
+
+  async function clearBookCover(bookId) {
+    await updateBook(bookId, { coverImage: null })
+    setBookActionId(null)
+    showToast('ลบปกหนังสือแล้ว')
+  }
+
+  function pickCurrentFolderCover() {
+    if (!currentFolder) {
+      return
+    }
+
+    setFolderCoverTargetId(currentFolder.id)
+    folderCoverInputRef.current?.click()
+  }
+
+  async function handleFolderCoverSelected(event) {
+    const file = event.target.files?.[0]
+
+    if (!file || !folderCoverTargetId) {
+      event.target.value = ''
+      return
+    }
+
+    const dataUrl = await readFileAsDataUrl(file)
+
+    const safeCover = normalizeCoverImage(dataUrl)
+
+    if (!safeCover) {
+      showToast('Only image files are supported / รองรับเฉพาะไฟล์ภาพเท่านั้น')
+      event.target.value = ''
+      return
+    }
+
+    await updateFolder(folderCoverTargetId, { coverImage: safeCover })
+    setFolderCoverTargetId(null)
+    showToast('ตั้งปกโฟลเดอร์แล้ว')
+    event.target.value = ''
+  }
+
+  async function clearCurrentFolderCover() {
+    if (!currentFolder) {
+      return
+    }
+
+    await updateFolder(currentFolder.id, { coverImage: null })
+    showToast('ลบปกโฟลเดอร์แล้ว')
+  }
+
+  async function handleOpenRemoteDoc(doc) {
+    if (!doc?.downloadUrl) {
+      showToast('ไม่มีลิงก์ไฟล์สำหรับเปิดอ่าน')
+      return
+    }
+
+    try {
+      const response = await fetch(doc.downloadUrl)
+
+      if (!response.ok) {
+        throw new Error(`Unable to load ${doc.name} from ${doc.path} (HTTP ${response.status}) / ไม่สามารถโหลดไฟล์`)
+      }
+
+      const content = await response.text()
+
+      setActiveWebBook({
+        id: doc.id,
+        title: doc.title,
+        fileName: doc.name,
+        folderId: '__remote__',
+        content,
+        excerpt: extractLead(content),
+        progress: 0,
+        readerFontSize: prefs.fontSize,
+        lastReadAt: null,
+        bookmarks: [],
+      })
+      setActiveBookId(null)
+      setBookActionId(null)
+      setView('reader')
+      setStatus(`เปิดอ่านไฟล์จากเว็บ: ${doc.name}`)
+    } catch (error) {
+      showToast(`เปิดไฟล์บนเว็บไม่สำเร็จ: ${String(error?.message ?? error)}`)
+    }
   }
 
   async function handleImportFiles(event) {
@@ -740,6 +1050,7 @@ function App() {
 
   async function handleOpenBook(bookId) {
     setBookActionId(null)
+    setActiveWebBook(null)
     setView('reader')
     setActiveBookId(bookId)
     await updateBook(bookId, { lastOpenedAt: Date.now() })
@@ -966,6 +1277,7 @@ function App() {
   function closeReader() {
     setView('library')
     setActiveBookId(null)
+    setActiveWebBook(null)
     setBookmarkPanelOpen(false)
     setReaderPassage(EMPTY_PASSAGE)
   }
@@ -1074,6 +1386,22 @@ function App() {
               </button>
               <button
                 type="button"
+                className="ghost-button"
+                onClick={pickCurrentFolderCover}
+                disabled={!currentFolder}
+              >
+                ตั้งปกโฟลเดอร์
+              </button>
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={clearCurrentFolderCover}
+                disabled={!currentFolder?.coverImage}
+              >
+                ลบปกโฟลเดอร์
+              </button>
+              <button
+                type="button"
                 className="ghost-button danger"
                 onClick={handleDeleteFolder}
                 disabled={!currentFolder || currentFolder.fixed}
@@ -1103,6 +1431,38 @@ function App() {
             </section>
           ) : null}
 
+          <section className="source-section">
+            <div className="section-heading">
+              <p className="eyebrow">Source</p>
+              <h3>แหล่งไฟล์ที่อ่านได้</h3>
+            </div>
+            <div className="source-grid">
+              <article className="source-card">
+                <strong>จากเครื่องของคุณ</strong>
+                <p>เพิ่มไฟล์ด้วยปุ่ม “เพิ่มหนังสือ” แล้วจัดโฟลเดอร์ได้ทันที</p>
+                <small>{books.length} ไฟล์ในคลังส่วนตัว</small>
+              </article>
+              <article className="source-card">
+                <strong>จาก public/docs บน GitHub</strong>
+                <p>รองรับไฟล์ที่อัปเข้าระบบจากทั้งหน้าเว็บ GitHub และจากเครื่องผ่าน git</p>
+                <div className="source-meta-row">
+                  <small>{remoteDocs.length} ไฟล์บนเว็บ</small>
+                  <button
+                    type="button"
+                    className="ghost-button"
+                    onClick={refreshRemoteDocs}
+                    disabled={remoteDocsStatus === 'loading'}
+                  >
+                    {remoteDocsStatus === 'loading' ? 'กำลังโหลด...' : 'รีเฟรช'}
+                  </button>
+                </div>
+              </article>
+            </div>
+            {remoteDocsStatus === 'error' ? (
+              <div className="source-error">โหลดรายการ public/docs ไม่สำเร็จ: {remoteDocsError}</div>
+            ) : null}
+          </section>
+
           <section className="subfolder-section">
             <div className="section-heading">
               <p className="eyebrow">Folder Shelf</p>
@@ -1111,20 +1471,33 @@ function App() {
             {childFolders.length ? (
               <div className="folder-bookshelf">
                 <div className="folder-book-row">
-                  {childFolders.map((folder, index) => (
-                    <button
-                      key={folder.id}
-                      type="button"
-                      className={`folder-book folder-tone-${index % 4}`}
-                      onClick={() => setCurrentFolderId(folder.id)}
-                    >
-                      <span className="folder-book-spine">{folder.name}</span>
-                      <div className="folder-book-front">
-                        <strong>{folder.name}</strong>
-                        <small>{books.filter((book) => book.folderId === folder.id).length} เล่ม</small>
-                      </div>
-                    </button>
-                  ))}
+                  {childFolders.map((folder, index) => {
+                    const folderCover = normalizeCoverImage(folder.coverImage)
+
+                    return (
+                      <button
+                        key={folder.id}
+                        type="button"
+                        className={`folder-book folder-tone-${index % 4}`}
+                        onClick={() => setCurrentFolderId(folder.id)}
+                      >
+                        <span className="folder-book-spine">{folder.name}</span>
+                        <div
+                          className={`folder-book-front ${folderCover ? 'has-cover' : ''}`}
+                          style={
+                            folderCover
+                              ? {
+                                  backgroundImage: `linear-gradient(180deg, rgba(20, 14, 10, 0.18), rgba(20, 14, 10, 0.54)), url(${folderCover})`,
+                                }
+                              : undefined
+                          }
+                        >
+                          <strong>{folder.name}</strong>
+                          <small>{books.filter((book) => book.folderId === folder.id).length} เล่ม</small>
+                        </div>
+                      </button>
+                    )
+                  })}
                 </div>
                 <div className="shelf-plank-block" />
               </div>
@@ -1143,50 +1516,109 @@ function App() {
               <div className="placeholder-card">กำลังเตรียมชั้นหนังสือ...</div>
             ) : folderBooks.length ? (
               <div className="book-grid">
-                {folderBooks.map((book, index) => (
-                  <article key={book.id} className={`book-card tone-${index % 4}`}>
-                    <button type="button" className="book-open" onClick={() => handleOpenBook(book.id)}>
-                      <span className="book-spine">{book.fileName.replace(/\.(md|markdown|txt)$/i, '').slice(0, 18)}</span>
-                      <div className="book-card-body">
-                        <p className="book-kicker">{formatDate(book.lastOpenedAt)}</p>
-                        <h4>{book.title}</h4>
-                        <p>{trimText(book.excerpt, 120)}</p>
-                        <div className="progress-line">
-                          <span style={{ width: `${book.progress ?? 0}%` }} />
-                        </div>
-                        <div className="book-meta">
-                          <small>{book.bookmarks?.length ?? 0} bookmarks</small>
-                          <strong>{book.progress ?? 0}%</strong>
-                        </div>
-                      </div>
-                    </button>
-                    <button
-                      type="button"
-                      className="book-menu"
-                      onClick={() => setBookActionId((current) => (current === book.id ? null : book.id))}
-                    >
-                      •••
-                    </button>
+                {folderBooks.map((book, index) => {
+                  const safeBookCover = normalizeCoverImage(book.coverImage)
 
-                    {bookActionId === book.id ? (
-                      <div className="book-sheet">
-                        <button type="button" onClick={() => handleOpenBook(book.id)}>
-                          เปิดอ่าน
-                        </button>
-                        <button type="button" onClick={() => setBookMoveId(book.id)}>
-                          ย้ายโฟลเดอร์
-                        </button>
-                        <button type="button" className="danger" onClick={() => handleDeleteBook(book.id)}>
-                          ลบหนังสือ
-                        </button>
-                      </div>
-                    ) : null}
+                  return (
+                    <article key={book.id} className={`book-card tone-${index % 4}`}>
+                      <button type="button" className="book-open" onClick={() => handleOpenBook(book.id)}>
+                        <div className="book-cover">
+                          {safeBookCover ? (
+                            <div
+                              className="book-cover-image"
+                              role="img"
+                              aria-label={`ปก ${book.title}`}
+                              style={{ backgroundImage: `url(${safeBookCover})` }}
+                            />
+                          ) : (
+                            <span className="book-spine">{book.fileName.replace(/\.(md|markdown|txt)$/i, '').slice(0, 18)}</span>
+                          )}
+                        </div>
+                        <div className="book-card-body">
+                          <p className="book-kicker">{formatDate(book.lastOpenedAt)}</p>
+                          <h4>{book.title}</h4>
+                          <p>{trimText(book.excerpt, 120)}</p>
+                          <div className="progress-line">
+                            <span style={{ width: `${book.progress ?? 0}%` }} />
+                          </div>
+                          <div className="book-meta">
+                            <small>{book.bookmarks?.length ?? 0} bookmarks</small>
+                            <strong>{book.progress ?? 0}%</strong>
+                          </div>
+                        </div>
+                      </button>
+                      <button
+                        type="button"
+                        className="book-menu"
+                        onClick={() => setBookActionId((current) => (current === book.id ? null : book.id))}
+                      >
+                        •••
+                      </button>
+
+                      {bookActionId === book.id ? (
+                        <div className="book-sheet">
+                          <button type="button" onClick={() => handleOpenBook(book.id)}>
+                            เปิดอ่าน
+                          </button>
+                          <button type="button" onClick={() => pickBookCover(book.id)}>
+                            ตั้งปกไฟล์
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => clearBookCover(book.id)}
+                            disabled={!safeBookCover}
+                          >
+                            ลบปกไฟล์
+                          </button>
+                          <button type="button" onClick={() => setBookMoveId(book.id)}>
+                            ย้ายโฟลเดอร์
+                          </button>
+                          <button type="button" className="danger" onClick={() => handleDeleteBook(book.id)}>
+                            ลบหนังสือ
+                          </button>
+                        </div>
+                      ) : null}
+                    </article>
+                  )
+                })}
+              </div>
+            ) : (
+              <div className="placeholder-card">
+                โฟลเดอร์นี้ยังไม่มีหนังสือ กด “เพิ่มหนังสือ” เพื่อ import ไฟล์ `.md`
+              </div>
+            )}
+          </section>
+
+          <section className="remote-doc-section">
+            <div className="section-heading">
+              <p className="eyebrow">Web Docs</p>
+              <h3>ไฟล์จาก public/docs บนเว็บ</h3>
+            </div>
+            {remoteDocsStatus === 'loading' ? (
+              <div className="placeholder-card">กำลังโหลดรายการไฟล์จาก public/docs ...</div>
+            ) : remoteDocs.length ? (
+              <div className="remote-doc-grid">
+                {remoteDocs.map((doc, index) => (
+                  <article key={doc.id} className={`remote-doc-card tone-${index % 4}`}>
+                    <div className="remote-doc-copy">
+                      <p className="book-kicker">{doc.path}</p>
+                      <h4>{doc.title}</h4>
+                      <p>เปิดอ่านไฟล์บนเว็บได้ทันที โดยไม่ต้องนำเข้าคลังส่วนตัวก่อน</p>
+                    </div>
+                    <div className="remote-doc-actions">
+                      <button type="button" className="primary-button" onClick={() => handleOpenRemoteDoc(doc)}>
+                        เปิดอ่านบนเว็บ
+                      </button>
+                      <a href={doc.htmlUrl} target="_blank" rel="noreferrer">
+                        เปิดบน GitHub
+                      </a>
+                    </div>
                   </article>
                 ))}
               </div>
             ) : (
               <div className="placeholder-card">
-                โฟลเดอร์นี้ยังไม่มีหนังสือ กด “เพิ่มหนังสือ” เพื่อ import ไฟล์ `.md`
+                ยังไม่พบไฟล์ใน public/docs — สามารถอัปได้ทั้งจากหน้าเว็บ GitHub หรือจากเครื่องด้วย git
               </div>
             )}
           </section>
@@ -1225,7 +1657,11 @@ function App() {
               </article>
               <article>
                 <strong>เพิ่มไฟล์อ่าน</strong>
-                <p>กด “เพิ่มหนังสือ” แล้วเลือกไฟล์ .md จากเครื่องของคุณ ข้อมูลจะอยู่ในเครื่องนี้เท่านั้น</p>
+                <p>เพิ่มได้ 2 ทาง: จากเครื่องด้วยปุ่ม “เพิ่มหนังสือ” และจาก public/docs ที่อัปขึ้น GitHub</p>
+              </article>
+              <article>
+                <strong>ใส่ปกไฟล์และโฟลเดอร์</strong>
+                <p>ใช้ “ตั้งปกไฟล์” ในเมนูหนังสือ หรือ “ตั้งปกโฟลเดอร์” ที่แถบคำสั่งด้านบน</p>
               </article>
               <article>
                 <strong>สำรองข้อมูล</strong>
@@ -1250,7 +1686,7 @@ function App() {
         </div>
       ) : null}
 
-      {view === 'reader' && activeBook ? (
+      {view === 'reader' && readerBook ? (
         <div className="reader-overlay">
           <section className="reader-panel">
             <header className="reader-topbar">
@@ -1259,20 +1695,31 @@ function App() {
               </button>
               <div className="reader-heading">
                 <p className="eyebrow">Now Reading</p>
-                <h2>{activeBook.title}</h2>
-                <span>{currentFolder?.name ?? 'ชั้นหนังสือ'}</span>
+                <h2>{readerBook.title}</h2>
+                <span>{activeBook ? currentFolder?.name ?? 'ชั้นหนังสือ' : 'public/docs บนเว็บ'}</span>
               </div>
               <div className="reader-tools">
-                <button type="button" className="ghost-button" onClick={() => adjustReaderFont(-1)}>
+                <button
+                  type="button"
+                  className="ghost-button"
+                  onClick={() => adjustReaderFont(-1)}
+                  disabled={!activeBook}
+                >
                   A-
                 </button>
-                <button type="button" className="ghost-button" onClick={() => adjustReaderFont(1)}>
+                <button
+                  type="button"
+                  className="ghost-button"
+                  onClick={() => adjustReaderFont(1)}
+                  disabled={!activeBook}
+                >
                   A+
                 </button>
                 <button
                   type="button"
                   className="ghost-button"
                   onClick={() => setBookmarkPanelOpen((current) => !current)}
+                  disabled={!activeBook}
                 >
                   บุ๊กมาร์ก
                 </button>
@@ -1290,7 +1737,7 @@ function App() {
                 <p>{readerPassage.excerpt}</p>
                 <div className="reader-side-meta">
                   <span>{readerProgress}%</span>
-                  <small>อัปเดตล่าสุด {formatDate(activeBook.lastReadAt)}</small>
+                  <small>อัปเดตล่าสุด {formatDate(activeBook?.lastReadAt)}</small>
                 </div>
               </aside>
 
@@ -1298,9 +1745,9 @@ function App() {
                 <article
                   ref={articleRef}
                   className="markdown-body"
-                  style={{ '--reader-font-size': `${activeBook.readerFontSize ?? prefs.fontSize}px` }}
+                  style={{ '--reader-font-size': `${readerBook.readerFontSize ?? prefs.fontSize}px` }}
                 >
-                  <ReactMarkdown>{activeBook.content}</ReactMarkdown>
+                  <ReactMarkdown>{readerBook.content}</ReactMarkdown>
                 </article>
               </div>
             </div>
@@ -1312,16 +1759,21 @@ function App() {
                 <small>{trimText(readerPassage.excerpt, 100)}</small>
               </div>
               <div className="reader-bottom-actions">
-                <button type="button" className="ghost-button" onClick={handleAddBookmark}>
+                <button type="button" className="ghost-button" onClick={handleAddBookmark} disabled={!activeBook}>
                   บุ๊กมาร์กตำแหน่งนี้
                 </button>
-                <button type="button" className="primary-button" onClick={handleSaveReadingPoint}>
+                <button
+                  type="button"
+                  className="primary-button"
+                  onClick={handleSaveReadingPoint}
+                  disabled={!activeBook}
+                >
                   บันทึกว่าอ่านถึงนี่
                 </button>
               </div>
             </footer>
 
-            {bookmarkPanelOpen ? (
+            {bookmarkPanelOpen && activeBook ? (
               <div className="bookmark-panel">
                 <div className="section-heading">
                   <p className="eyebrow">Bookmarks</p>
@@ -1415,6 +1867,20 @@ function App() {
         accept="application/json,.json"
         className="hidden-input"
         onChange={handleImportBackup}
+      />
+      <input
+        ref={bookCoverInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden-input"
+        onChange={handleBookCoverSelected}
+      />
+      <input
+        ref={folderCoverInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden-input"
+        onChange={handleFolderCoverSelected}
       />
     </div>
   )
