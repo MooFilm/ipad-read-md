@@ -364,9 +364,62 @@ select {
 }
 
 .recent-section,
+.source-section,
 .subfolder-section,
-.book-section {
+.book-section,
+.remote-doc-section {
   margin-top: 1.4rem;
+}
+
+.source-grid,
+.remote-doc-grid {
+  display: grid;
+  gap: 0.95rem;
+}
+
+.source-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.source-card,
+.remote-doc-card {
+  padding: 1rem 1.05rem;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.78);
+  background: rgba(255, 255, 255, 0.58);
+  box-shadow: var(--shadow-soft);
+}
+
+.source-card strong,
+.source-card small,
+.remote-doc-card h4 {
+  display: block;
+}
+
+.source-card p,
+.remote-doc-card p {
+  margin: 0.45rem 0;
+  color: var(--ink-soft);
+  line-height: 1.55;
+}
+
+.source-meta-row {
+  margin-top: 0.6rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
+.source-meta-row .ghost-button {
+  min-height: 38px;
+  padding: 0.45rem 0.7rem;
+}
+
+.source-error {
+  margin-top: 0.6rem;
+  color: var(--danger);
+  font-size: 0.9rem;
 }
 
 .library-bottom-actions {
@@ -534,6 +587,13 @@ select {
     inset 0 0 0 3px rgba(255, 255, 255, 0.06),
     inset -6px -6px 0 rgba(0, 0, 0, 0.12),
     0 12px 22px rgba(25, 15, 10, 0.28);
+  background-size: cover;
+  background-position: center;
+}
+
+.folder-book-front.has-cover {
+  background-size: cover;
+  background-position: center;
 }
 
 .folder-book-front strong {
@@ -606,6 +666,20 @@ select {
   padding: 1.05rem;
   text-align: left;
   cursor: pointer;
+}
+
+.book-cover {
+  min-height: 176px;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: inset 2px 0 0 rgba(255, 255, 255, 0.15);
+}
+
+.book-cover-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
 .book-spine {
@@ -708,6 +782,39 @@ select {
   text-align: left;
   padding: 0.7rem 0.85rem;
   cursor: pointer;
+}
+
+.book-sheet button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.remote-doc-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.remote-doc-copy h4 {
+  margin: 0.1rem 0 0.4rem;
+  font-family: 'Playfair Display', serif;
+}
+
+.remote-doc-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  margin-top: 0.65rem;
+}
+
+.remote-doc-actions a {
+  display: inline-flex;
+  align-items: center;
+  color: var(--ink-soft);
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+
+.remote-doc-actions a:hover {
+  text-decoration: underline;
 }
 
 .book-sheet button.danger {
@@ -1021,6 +1128,11 @@ select {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .source-grid,
+  .remote-doc-grid {
+    grid-template-columns: 1fr;
+  }
+
   .library-bottom-actions {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1069,6 +1181,8 @@ select {
   .summary-pills,
   .backup-reminder-actions,
   .book-grid,
+  .source-grid,
+  .remote-doc-grid,
   .library-bottom-actions {
     grid-template-columns: 1fr;
   }
