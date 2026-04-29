@@ -266,6 +266,67 @@ function fileListToArray(fileList) {
   return Array.from(fileList ?? []).filter((file) => /\.(md|markdown|txt)$/i.test(file.name))
 }
 
+function parseGithubRepo(input) {
+  const cleaned = input.trim().replace(/\.git$/, '').replace(/\/$/, '')
+  const ghMatch = cleaned.match(/github\.com\/([^/\s]+)\/([^/\s?#]+)/)
+  if (ghMatch) return { owner: ghMatch[1], repo: ghMatch[2] }
+  const plainMatch = cleaned.match(/^([^/\s]+)\/([^/\s]+)$/)
+  if (plainMatch) return { owner: plainMatch[1], repo: plainMatch[2] }
+  return null
+}
+
+async function fetchGithubFileTree(owner, repo, token) {
+  const headers = { Accept: 'application/vnd.github+json' }
+  if (token) headers.Authorization = `Bearer ${token}`
+
+  const repoRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, { headers })
+  if (!repoRes.ok) {
+    const msg =
+      repoRes.status === 404
+        ? 'ไม่พบ repo หรือ repo เป็น private (ต้องใส่ token)'
+        : `GitHub API Error ${repoRes.status}`
+    throw new Error(msg)
+  }
+  const repoData = await repoRes.json()
+
+  const treeRes = await fetch(
+    `https://api.github.com/repos/${owner}/${repo}/git/trees/${repoData.default_branch}?recursive=1`,
+    { headers },
+  )
+  if (!treeRes.ok) throw new Error(`โหลดโครงสร้างไฟล์ไม่ได้: ${treeRes.status}`)
+  const treeData = await treeRes.json()
+
+  return (treeData.tree ?? [])
+    .filter((item) => item.type === 'blob' && /\.(md|markdown|txt)$/i.test(item.path))
+    .map((item) => item.path)
+    .sort()
+}
+
+async function fetchGithubFileContent(owner, repo, filePath, token) {
+  const headers = { Accept: 'application/vnd.github+json' }
+  if (token) headers.Authorization = `Bearer ${token}`
+
+  const res = await fetch(
+    `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}`,
+    { headers },
+  )
+  if (!res.ok) throw new Error(`โหลดไฟล์ไม่ได้ (${res.status}): ${filePath}`)
+  const data = await res.json()
+
+  if (data.encoding === 'base64' && data.content) {
+    return atob(data.content.replace(/\n/g, ''))
+  }
+
+  if (data.download_url) {
+    const rawHeaders = token ? { Authorization: `Bearer ${token}` } : {}
+    const rawRes = await fetch(data.download_url, { headers: rawHeaders })
+    if (!rawRes.ok) throw new Error(`โหลดเนื้อหาไฟล์ไม่ได้: ${filePath}`)
+    return rawRes.text()
+  }
+
+  throw new Error(`ไม่สามารถอ่านเนื้อหาของไฟล์: ${filePath}`)
+}
+
 function App() {
   const [folders, setFolders] = useState([])
   const [books, setBooks] = useState([])
@@ -286,6 +347,14 @@ function App() {
   const [readerPassage, setReaderPassage] = useState(EMPTY_PASSAGE)
   const [readerProgress, setReaderProgress] = useState(0)
   const [toastMessage, setToastMessage] = useState('')
+  const [ghModalOpen, setGhModalOpen] = useState(false)
+  const [ghRepo, setGhRepo] = useState('')
+  const [ghToken, setGhToken] = useState('')
+  const [ghFiles, setGhFiles] = useState([])
+  const [ghSelected, setGhSelected] = useState(new Set())
+  const [ghStatus, setGhStatus] = useState('idle')
+  const [ghError, setGhError] = useState('')
+
   const fileInputRef = useRef(null)
   const backupInputRef = useRef(null)
   const readerScrollRef = useRef(null)
@@ -970,6 +1039,98 @@ function App() {
     setReaderPassage(EMPTY_PASSAGE)
   }
 
+  function closeGhModal() {
+    setGhModalOpen(false)
+    setGhRepo('')
+    setGhToken('')
+    setGhFiles([])
+    setGhSelected(new Set())
+    setGhStatus('idle')
+    setGhError('')
+  }
+
+  async function handleGithubFetch() {
+    const parsed = parseGithubRepo(ghRepo)
+    if (!parsed) {
+      setGhError('รูปแบบไม่ถูกต้อง ตัวอย่าง: owner/repo หรือ https://github.com/owner/repo')
+      return
+    }
+    setGhStatus('fetching')
+    setGhError('')
+    setGhFiles([])
+    setGhSelected(new Set())
+    try {
+      const files = await fetchGithubFileTree(parsed.owner, parsed.repo, ghToken.trim())
+      setGhFiles(files)
+      setGhSelected(new Set(files))
+      setGhStatus('idle')
+      if (!files.length) setGhError('ไม่พบไฟล์ .md / .txt ใน repo นี้')
+    } catch (error) {
+      setGhStatus('error')
+      setGhError(String(error.message ?? error))
+    }
+  }
+
+  async function handleGithubImport() {
+    if (!ghSelected.size) return
+    const parsed = parseGithubRepo(ghRepo)
+    if (!parsed) return
+    setGhStatus('importing')
+    setGhError('')
+    try {
+      const selectedPaths = [...ghSelected]
+      const incomingBooks = await Promise.all(
+        selectedPaths.map(async (filePath) => {
+          const content = await fetchGithubFileContent(
+            parsed.owner,
+            parsed.repo,
+            filePath,
+            ghToken.trim(),
+          )
+          const fileName = filePath.split('/').pop() || filePath
+          return {
+            id: createId('book'),
+            title: stripExtension(fileName),
+            fileName,
+            folderId: currentFolderId || DEFAULT_FOLDER_ID,
+            content,
+            excerpt: extractLead(content),
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            lastOpenedAt: null,
+            lastReadAt: null,
+            progress: 0,
+            readerFontSize: prefs.fontSize,
+            bookmarks: [],
+          }
+        }),
+      )
+
+      const duplicates = incomingBooks.filter((incoming) =>
+        books.some(
+          (book) =>
+            book.folderId === incoming.folderId &&
+            book.fileName.toLowerCase() === incoming.fileName.toLowerCase(),
+        ),
+      )
+      const acceptedBooks = incomingBooks.filter(
+        (incoming) => !duplicates.some((dup) => dup.id === incoming.id),
+      )
+
+      if (acceptedBooks.length) {
+        await putBooks(acceptedBooks)
+        await syncBooks([...acceptedBooks, ...books])
+      }
+      if (duplicates.length) showToast(`ข้าม ${duplicates.length} ไฟล์ที่ชื่อซ้ำ`)
+      if (acceptedBooks.length) showToast(`นำเข้าจาก GitHub ${acceptedBooks.length} เล่มแล้ว`)
+      setGhStatus('idle')
+      closeGhModal()
+    } catch (error) {
+      setGhStatus('error')
+      setGhError(String(error.message ?? error))
+    }
+  }
+
   function renderFolderOption(option) {
     return (
       <option key={option.id} value={option.id}>
@@ -1203,6 +1364,9 @@ function App() {
             <button type="button" className="ghost-button" onClick={() => openFolderEditor('create')}>
               {currentFolder?.parentId ? 'เพิ่มโฟลเดอร์ย่อย' : 'เพิ่มโฟลเดอร์'}
             </button>
+            <button type="button" className="ghost-button" onClick={() => setGhModalOpen(true)}>
+              นำเข้าจาก GitHub
+            </button>
             <button type="button" className="ghost-button" onClick={handleShareBackup}>
               แบ็กอัป
             </button>
@@ -1394,6 +1558,103 @@ function App() {
               <button type="button" className="ghost-button" onClick={() => setBookMoveId(null)}>
                 ปิด
               </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {ghModalOpen ? (
+        <div className="modal-overlay" onClick={closeGhModal}>
+          <div className="modal-card gh-modal" onClick={(event) => event.stopPropagation()}>
+            <p className="eyebrow">GitHub Sync</p>
+            <h3>นำเข้าไฟล์จาก GitHub</h3>
+
+            <div className="gh-field-group">
+              <label className="gh-label">GitHub Repository</label>
+              <input
+                type="text"
+                className="gh-input"
+                value={ghRepo}
+                onChange={(event) => setGhRepo(event.target.value)}
+                placeholder="owner/repo หรือ https://github.com/owner/repo"
+                disabled={ghStatus === 'fetching' || ghStatus === 'importing'}
+              />
+            </div>
+
+            <div className="gh-field-group">
+              <label className="gh-label">Personal Access Token <span className="gh-optional">(ถ้า repo เป็น private)</span></label>
+              <input
+                type="password"
+                className="gh-input"
+                value={ghToken}
+                onChange={(event) => setGhToken(event.target.value)}
+                placeholder="ghp_xxxxxxxxxxxx"
+                disabled={ghStatus === 'fetching' || ghStatus === 'importing'}
+              />
+              <p className="gh-token-note">Token จะไม่ถูกบันทึกไว้ในเครื่อง ใช้เฉพาะครั้งนี้เท่านั้น</p>
+            </div>
+
+            {ghError ? <p className="gh-error">{ghError}</p> : null}
+
+            {ghFiles.length > 0 ? (
+              <div className="gh-file-section">
+                <div className="gh-file-header">
+                  <span>พบ {ghFiles.length} ไฟล์ — เลือก {ghSelected.size} ไฟล์</span>
+                  <div className="gh-file-header-actions">
+                    <button type="button" className="gh-text-btn" onClick={() => setGhSelected(new Set(ghFiles))}>
+                      เลือกทั้งหมด
+                    </button>
+                    <button type="button" className="gh-text-btn" onClick={() => setGhSelected(new Set())}>
+                      ยกเลิกทั้งหมด
+                    </button>
+                  </div>
+                </div>
+                <ul className="gh-file-list">
+                  {ghFiles.map((filePath) => (
+                    <li key={filePath} className="gh-file-item">
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={ghSelected.has(filePath)}
+                          onChange={() =>
+                            setGhSelected((previous) => {
+                              const next = new Set(previous)
+                              next.has(filePath) ? next.delete(filePath) : next.add(filePath)
+                              return next
+                            })
+                          }
+                        />
+                        <span>{filePath}</span>
+                      </label>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+
+            <div className="modal-actions">
+              <button type="button" className="ghost-button" onClick={closeGhModal}>
+                ยกเลิก
+              </button>
+              {ghFiles.length === 0 ? (
+                <button
+                  type="button"
+                  className="primary-button"
+                  onClick={handleGithubFetch}
+                  disabled={!ghRepo.trim() || ghStatus === 'fetching'}
+                >
+                  {ghStatus === 'fetching' ? 'กำลังค้นหา...' : 'ค้นหาไฟล์'}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="primary-button"
+                  onClick={handleGithubImport}
+                  disabled={!ghSelected.size || ghStatus === 'importing'}
+                >
+                  {ghStatus === 'importing' ? 'กำลังนำเข้า...' : `นำเข้า ${ghSelected.size} ไฟล์`}
+                </button>
+              )}
             </div>
           </div>
         </div>
