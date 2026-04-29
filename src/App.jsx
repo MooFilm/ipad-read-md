@@ -5,6 +5,7 @@ import {
   deleteBook,
   deleteFolder,
   getLibrarySnapshot,
+  normalizePrefs,
   putBook,
   putBooks,
   putFolder,
@@ -51,6 +52,8 @@ const STORAGE_MODE_LABEL = {
   indexedDB: 'IndexedDB',
   localStorage: 'localStorage',
 }
+const GITHUB_ROOT_PATH = defaultPrefs.github.rootPath
+const MARKDOWN_FILE_PATTERN = /\.(md|markdown|txt)$/i
 
 function isSameCalendarDay(leftValue, rightValue) {
   if (!leftValue || !rightValue) {
@@ -236,6 +239,23 @@ function buildBreadcrumb(currentFolder, folderMap) {
   return chain
 }
 
+function getFolderPathSegments(folderId, folderMap, rootId = DEFAULT_FOLDER_ID) {
+  const segments = []
+  let pointer = folderMap.get(folderId)
+
+  while (pointer) {
+    if (pointer.id !== rootId) {
+      const cleaned = sanitizePathSegment(pointer.name)
+      if (cleaned) {
+        segments.unshift(cleaned)
+      }
+    }
+    pointer = pointer.parentId ? folderMap.get(pointer.parentId) : null
+  }
+
+  return segments
+}
+
 function sortBooks(items, sortBy) {
   const books = [...items]
 
@@ -263,7 +283,61 @@ function extractLead(content) {
 }
 
 function fileListToArray(fileList) {
-  return Array.from(fileList ?? []).filter((file) => /\.(md|markdown|txt)$/i.test(file.name))
+  return Array.from(fileList ?? []).filter((file) => MARKDOWN_FILE_PATTERN.test(file.name))
+}
+
+function sanitizePathSegment(value) {
+  return (value ?? '')
+    .trim()
+    .replace(/[\\/]+/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function ensureFileExtension(fileName) {
+  if (!fileName) {
+    return 'untitled.md'
+  }
+
+  return MARKDOWN_FILE_PATTERN.test(fileName) ? fileName : `${fileName}.md`
+}
+
+function sanitizeFileName(fileName) {
+  const cleaned = sanitizePathSegment(fileName.split(/[\\/]/).pop() ?? '')
+  return ensureFileExtension(cleaned)
+}
+
+function buildGithubPath(rootPath, folders, fileName) {
+  return [rootPath, ...folders.filter(Boolean), fileName].filter(Boolean).join('/')
+}
+
+function encodeGithubPath(path) {
+  return path
+    .split('/')
+    .map((segment) => encodeURIComponent(segment))
+    .join('/')
+}
+
+function stripRootPath(path, rootPath) {
+  const normalizedRoot = rootPath.replace(/^\/+|\/+$/g, '')
+  const normalizedPath = path.replace(/^\/+|\/+$/g, '')
+  if (normalizedPath.startsWith(`${normalizedRoot}/`)) {
+    return normalizedPath.slice(normalizedRoot.length + 1)
+  }
+  if (normalizedPath === normalizedRoot) {
+    return ''
+  }
+  return normalizedPath
+}
+
+function buildGithubHeaders(token) {
+  const headers = {
+    Accept: 'application/vnd.github+json',
+  }
+  if (token) {
+    headers.Authorization = `Bearer ${token}`
+  }
+  return headers
 }
 
 function parseGithubRepo(input) {
@@ -275,9 +349,8 @@ function parseGithubRepo(input) {
   return null
 }
 
-async function fetchGithubFileTree(owner, repo, token) {
-  const headers = { Accept: 'application/vnd.github+json' }
-  if (token) headers.Authorization = `Bearer ${token}`
+async function fetchGithubFileTree(owner, repo, rootPath, token) {
+  const headers = buildGithubHeaders(token)
 
   const repoRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, { headers })
   if (!repoRes.ok) {
@@ -296,35 +369,83 @@ async function fetchGithubFileTree(owner, repo, token) {
   if (!treeRes.ok) throw new Error(`โหลดโครงสร้างไฟล์ไม่ได้: ${treeRes.status}`)
   const treeData = await treeRes.json()
 
+  const normalizedRoot = rootPath.replace(/^\/+|\/+$/g, '')
+
   return (treeData.tree ?? [])
-    .filter((item) => item.type === 'blob' && /\.(md|markdown|txt)$/i.test(item.path))
-    .map((item) => item.path)
-    .sort()
+    .filter((item) => item.type === 'blob' && MARKDOWN_FILE_PATTERN.test(item.path))
+    .filter((item) => item.path === normalizedRoot || item.path.startsWith(`${normalizedRoot}/`))
+    .map((item) => ({ path: item.path, sha: item.sha }))
+    .sort((left, right) => left.path.localeCompare(right.path, 'en'))
+}
+
+async function fetchGithubFileMeta(owner, repo, filePath, token) {
+  const headers = buildGithubHeaders(token)
+  const res = await fetch(
+    `https://api.github.com/repos/${owner}/${repo}/contents/${encodeGithubPath(filePath)}`,
+    { headers },
+  )
+  if (res.status === 404) {
+    return null
+  }
+  if (!res.ok) {
+    throw new Error(`ตรวจสอบไฟล์บน GitHub ไม่สำเร็จ (${res.status})`)
+  }
+  const data = await res.json()
+  if (Array.isArray(data)) {
+    return { sha: null, isDirectory: true }
+  }
+  return { sha: data.sha ?? null, isDirectory: false }
 }
 
 async function fetchGithubFileContent(owner, repo, filePath, token) {
-  const headers = { Accept: 'application/vnd.github+json' }
-  if (token) headers.Authorization = `Bearer ${token}`
+  const headers = buildGithubHeaders(token)
 
   const res = await fetch(
-    `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}`,
+    `https://api.github.com/repos/${owner}/${repo}/contents/${encodeGithubPath(filePath)}`,
     { headers },
   )
   if (!res.ok) throw new Error(`โหลดไฟล์ไม่ได้ (${res.status}): ${filePath}`)
   const data = await res.json()
 
   if (data.encoding === 'base64' && data.content) {
-    return atob(data.content.replace(/\n/g, ''))
+    return { content: atob(data.content.replace(/\n/g, '')), sha: data.sha ?? null }
   }
 
   if (data.download_url) {
     const rawHeaders = token ? { Authorization: `Bearer ${token}` } : {}
     const rawRes = await fetch(data.download_url, { headers: rawHeaders })
     if (!rawRes.ok) throw new Error(`โหลดเนื้อหาไฟล์ไม่ได้: ${filePath}`)
-    return rawRes.text()
+    return { content: await rawRes.text(), sha: data.sha ?? null }
   }
 
   throw new Error(`ไม่สามารถอ่านเนื้อหาของไฟล์: ${filePath}`)
+}
+
+async function uploadGithubFile({ owner, repo, filePath, content, message, token, sha }) {
+  const headers = {
+    ...buildGithubHeaders(token),
+    'Content-Type': 'application/json',
+  }
+  const encodedContent = btoa(unescape(encodeURIComponent(content)))
+  const res = await fetch(
+    `https://api.github.com/repos/${owner}/${repo}/contents/${encodeGithubPath(filePath)}`,
+    {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({
+        message,
+        content: encodedContent,
+        sha: sha ?? undefined,
+      }),
+    },
+  )
+
+  if (!res.ok) {
+    throw new Error(`อัปโหลดไฟล์ไม่สำเร็จ (${res.status})`)
+  }
+
+  const data = await res.json()
+  return data.content?.sha ?? null
 }
 
 function App() {
@@ -354,6 +475,14 @@ function App() {
   const [ghSelected, setGhSelected] = useState(new Set())
   const [ghStatus, setGhStatus] = useState('idle')
   const [ghError, setGhError] = useState('')
+  const [ghSettingsOpen, setGhSettingsOpen] = useState(false)
+  const [ghSettingsDraft, setGhSettingsDraft] = useState({
+    repo: '',
+    token: '',
+    syncMode: defaultPrefs.github.syncMode,
+  })
+  const [ghSyncing, setGhSyncing] = useState(false)
+  const [ghSyncError, setGhSyncError] = useState('')
 
   const fileInputRef = useRef(null)
   const backupInputRef = useRef(null)
@@ -365,11 +494,15 @@ function App() {
   const lastPassageSampleRef = useRef(0)
   const lastProgressRef = useRef(0)
   const toastTimerRef = useRef(null)
+  const autoSyncRef = useRef(false)
 
   const folderMap = useMemo(
     () => new Map(folders.map((folder) => [folder.id, folder])),
     [folders],
   )
+  const githubPrefs = prefs.github ?? defaultPrefs.github
+  const githubRepoKey = githubPrefs.repo?.trim() ?? ''
+  const githubToken = githubPrefs.token?.trim() ?? ''
 
   const activeBook = useMemo(
     () => books.find((book) => book.id === activeBookId) ?? null,
@@ -451,6 +584,18 @@ function App() {
     }
   }, [storageMode])
 
+  const githubSummary = useMemo(() => {
+    if (!githubRepoKey) {
+      return 'ยังไม่ได้เชื่อมต่อ GitHub'
+    }
+
+    if (!githubPrefs.lastSyncedAt) {
+      return 'ยังไม่เคยซิงก์จาก GitHub'
+    }
+
+    return `ซิงก์ล่าสุด ${formatDate(githubPrefs.lastSyncedAt)}`
+  }, [githubRepoKey, githubPrefs.lastSyncedAt])
+
   const needsBackupReminder = useMemo(() => {
     if (!books.length) {
       return false
@@ -493,7 +638,7 @@ function App() {
 
       setFolders(nextFolders)
       setBooks(nextBooks)
-      setPrefs({ ...defaultPrefs, ...snapshot.prefs })
+      setPrefs(normalizePrefs(snapshot.prefs))
       setStorageMode(snapshot.storageMode)
       setCurrentFolderId(
         nextFolders.find((folder) => folder.id === DEFAULT_FOLDER_ID)?.id ?? nextFolders[0]?.id ?? DEFAULT_FOLDER_ID,
@@ -507,6 +652,23 @@ function App() {
       active = false
     }
   }, [])
+
+  useEffect(() => {
+    if (isBooting) {
+      return
+    }
+
+    if (autoSyncRef.current) {
+      return
+    }
+
+    if (githubPrefs.syncMode !== 'auto' || !githubRepoKey) {
+      return
+    }
+
+    autoSyncRef.current = true
+    void handleGithubSync({ silent: true })
+  }, [isBooting, githubPrefs.syncMode, githubRepoKey])
 
   useEffect(() => {
     if (toastTimerRef.current) {
@@ -628,8 +790,9 @@ function App() {
   }, [view, activeBookId])
 
   async function syncPrefs(nextPrefs) {
-    setPrefs(nextPrefs)
-    await putPrefs(nextPrefs)
+    const normalized = normalizePrefs(nextPrefs)
+    setPrefs(normalized)
+    await putPrefs(normalized)
   }
 
   async function syncFolders(nextFolders) {
@@ -666,6 +829,77 @@ function App() {
     setToastMessage(message)
   }
 
+  function getGithubConfig() {
+    if (!githubRepoKey) {
+      return null
+    }
+    const parsed = parseGithubRepo(githubRepoKey)
+    if (!parsed) {
+      return null
+    }
+    return {
+      owner: parsed.owner,
+      repo: parsed.repo,
+      repoKey: `${parsed.owner}/${parsed.repo}`,
+      token: githubToken,
+      rootPath: githubPrefs.rootPath || GITHUB_ROOT_PATH,
+    }
+  }
+
+  function getGithubFolderSegments(folderId) {
+    return getFolderPathSegments(folderId ?? DEFAULT_FOLDER_ID, folderMap)
+  }
+
+  async function resolveGithubUploadTarget({
+    config,
+    folderSegments,
+    fileName,
+    folderId,
+    existingBooks,
+  }) {
+    let targetName = sanitizeFileName(fileName)
+    let targetPath = buildGithubPath(config.rootPath, folderSegments, targetName)
+    let existing = await fetchGithubFileMeta(config.owner, config.repo, targetPath, config.token)
+
+    if (!existing) {
+      return { fileName: targetName, path: targetPath, sha: null }
+    }
+
+    if (existing.isDirectory) {
+      showToast('ชื่อไฟล์ชนกับโฟลเดอร์ใน GitHub')
+      return null
+    }
+
+    const overwrite = window.confirm(`ไฟล์ “${targetName}” มีอยู่แล้วบน GitHub ต้องการเขียนทับหรือไม่?`)
+    if (overwrite) {
+      return { fileName: targetName, path: targetPath, sha: existing.sha }
+    }
+
+    const renamed = window.prompt('ตั้งชื่อไฟล์ใหม่ (ใส่นามสกุล .md ถ้าต้องการ)', targetName)
+    if (!renamed) {
+      return null
+    }
+
+    targetName = sanitizeFileName(renamed)
+    const hasLocalDuplicate = existingBooks.some(
+      (book) => book.folderId === folderId && book.fileName.toLowerCase() === targetName.toLowerCase(),
+    )
+
+    if (hasLocalDuplicate) {
+      showToast('มีไฟล์ชื่อซ้ำในโฟลเดอร์นี้')
+      return null
+    }
+
+    targetPath = buildGithubPath(config.rootPath, folderSegments, targetName)
+    existing = await fetchGithubFileMeta(config.owner, config.repo, targetPath, config.token)
+    if (existing) {
+      showToast('ชื่อไฟล์ซ้ำบน GitHub อยู่แล้ว')
+      return null
+    }
+
+    return { fileName: targetName, path: targetPath, sha: null }
+  }
+
   async function handleImportFiles(event) {
     const files = fileListToArray(event.target.files)
 
@@ -675,15 +909,19 @@ function App() {
 
     setIsImporting(true)
     const targetFolderId = currentFolderId || DEFAULT_FOLDER_ID
+    const githubConfig = getGithubConfig()
+    const shouldUpload = Boolean(githubConfig)
+    const canUpload = Boolean(githubConfig?.token)
 
     const incomingBooks = await Promise.all(
       files.map(async (file) => {
         const content = await file.text()
+        const safeName = sanitizeFileName(file.name)
 
         return {
           id: createId('book'),
-          title: stripExtension(file.name),
-          fileName: file.name,
+          title: stripExtension(safeName),
+          fileName: safeName,
           folderId: targetFolderId,
           content,
           excerpt: extractLead(content),
@@ -710,18 +948,94 @@ function App() {
       (incoming) => !duplicates.some((duplicate) => duplicate.id === incoming.id),
     )
 
-    if (acceptedBooks.length) {
-      const nextBooks = [...acceptedBooks, ...books]
-      await putBooks(acceptedBooks)
+    const preparedBooks = []
+    const folderSegments = getGithubFolderSegments(targetFolderId)
+    let skipped = 0
+    let uploaded = 0
+    let uploadFailed = 0
+    let warnedMissingToken = false
+
+    for (const [index, book] of acceptedBooks.entries()) {
+      let nextBook = book
+      const existingBooks = [...books, ...preparedBooks]
+
+      if (shouldUpload) {
+        if (!canUpload) {
+          if (!warnedMissingToken) {
+            showToast('ยังไม่ได้ตั้งค่า GitHub token จึงบันทึกไว้เฉพาะในเครื่อง')
+            warnedMissingToken = true
+          }
+        } else {
+          setStatus(`กำลังอัปโหลด ${index + 1}/${acceptedBooks.length} ไป GitHub`)
+
+          const resolved = await resolveGithubUploadTarget({
+            config: githubConfig,
+            folderSegments,
+            fileName: book.fileName,
+            folderId: targetFolderId,
+            existingBooks,
+          })
+
+          if (!resolved) {
+            skipped += 1
+            continue
+          }
+
+          try {
+            const sha = await uploadGithubFile({
+              owner: githubConfig.owner,
+              repo: githubConfig.repo,
+              filePath: resolved.path,
+              content: book.content,
+              message: `Add ${resolved.fileName} via ReadShelf`,
+              token: githubConfig.token,
+              sha: resolved.sha,
+            })
+
+            nextBook = {
+              ...book,
+              fileName: resolved.fileName,
+              title: stripExtension(resolved.fileName),
+              source: {
+                type: 'github',
+                repo: githubConfig.repoKey,
+                path: resolved.path,
+                sha,
+              },
+            }
+            uploaded += 1
+          } catch (error) {
+            uploadFailed += 1
+            showToast(`อัปโหลด ${book.fileName} ไม่สำเร็จ`)
+          }
+        }
+      }
+
+      preparedBooks.push(nextBook)
+    }
+
+    if (preparedBooks.length) {
+      const nextBooks = [...preparedBooks, ...books]
+      await putBooks(preparedBooks)
       await syncBooks(nextBooks)
-      showToast(`เพิ่มหนังสือ ${acceptedBooks.length} เล่มแล้ว`)
+      showToast(`เพิ่มหนังสือ ${preparedBooks.length} เล่มแล้ว`)
     }
 
     if (duplicates.length) {
       showToast(`ข้าม ${duplicates.length} ไฟล์ที่ชื่อซ้ำในโฟลเดอร์นี้`)
     }
 
-    setStatus('นำเข้าไฟล์ใหม่เรียบร้อยแล้ว')
+    if (skipped) {
+      showToast(`ข้ามไฟล์ ${skipped} รายการที่ยังไม่พร้อมอัปโหลด`)
+    }
+
+    if (uploaded) {
+      setStatus(`อัปโหลดขึ้น GitHub แล้ว ${uploaded} ไฟล์`)
+    } else if (uploadFailed) {
+      setStatus('มีไฟล์บางส่วนอัปโหลดไม่สำเร็จ')
+    } else {
+      setStatus('นำเข้าไฟล์ใหม่เรียบร้อยแล้ว')
+    }
     setIsImporting(false)
     event.target.value = ''
   }
@@ -950,12 +1264,12 @@ function App() {
       await replaceLibrary({
         folders: payload.folders,
         books: payload.books,
-        prefs: { ...defaultPrefs, ...(payload.prefs ?? {}) },
+        prefs: normalizePrefs(payload.prefs ?? {}),
       })
 
       await syncFolders(payload.folders)
       await syncBooks(payload.books)
-      setPrefs({ ...defaultPrefs, ...(payload.prefs ?? {}) })
+      setPrefs(normalizePrefs(payload.prefs ?? {}))
       setCurrentFolderId(payload.folders[0]?.id ?? DEFAULT_FOLDER_ID)
       setStatus('นำเข้าแบ็กอัปแล้ว')
       showToast('กู้คืนคลังหนังสือสำเร็จ')
@@ -1039,6 +1353,16 @@ function App() {
     setReaderPassage(EMPTY_PASSAGE)
   }
 
+  function openGhModal() {
+    setGhRepo(githubRepoKey)
+    setGhToken(githubToken)
+    setGhFiles([])
+    setGhSelected(new Set())
+    setGhStatus('idle')
+    setGhError('')
+    setGhModalOpen(true)
+  }
+
   function closeGhModal() {
     setGhModalOpen(false)
     setGhRepo('')
@@ -1047,6 +1371,246 @@ function App() {
     setGhSelected(new Set())
     setGhStatus('idle')
     setGhError('')
+  }
+
+  function openGhSettings() {
+    setGhSettingsDraft({
+      repo: githubRepoKey,
+      token: githubToken,
+      syncMode: githubPrefs.syncMode ?? defaultPrefs.github.syncMode,
+    })
+    setGhSettingsOpen(true)
+    setGhSyncError('')
+  }
+
+  function closeGhSettings() {
+    setGhSettingsOpen(false)
+  }
+
+  async function handleSaveGhSettings(event) {
+    event.preventDefault()
+    const repoInput = ghSettingsDraft.repo.trim()
+
+    if (repoInput) {
+      const parsed = parseGithubRepo(repoInput)
+      if (!parsed) {
+        setGhSyncError('รูปแบบ repo ไม่ถูกต้อง ตัวอย่าง: owner/repo')
+        return
+      }
+      const nextPrefs = normalizePrefs({
+        ...prefs,
+        github: {
+          ...githubPrefs,
+          repo: `${parsed.owner}/${parsed.repo}`,
+          token: ghSettingsDraft.token.trim(),
+          syncMode: ghSettingsDraft.syncMode,
+        },
+      })
+      await syncPrefs(nextPrefs)
+    } else {
+      const nextPrefs = normalizePrefs({
+        ...prefs,
+        github: {
+          ...githubPrefs,
+          repo: '',
+          token: '',
+          syncMode: ghSettingsDraft.syncMode,
+          lastSyncedAt: null,
+        },
+      })
+      await syncPrefs(nextPrefs)
+    }
+
+    autoSyncRef.current = false
+    setStatus('บันทึกการตั้งค่า GitHub แล้ว')
+    setGhSettingsOpen(false)
+  }
+
+  async function ensureFolderPath(existingFolders, segments) {
+    let nextFolders = [...existingFolders]
+    let parentId = DEFAULT_FOLDER_ID
+    let changed = false
+
+    for (const segment of segments) {
+      const cleaned = sanitizePathSegment(segment)
+      if (!cleaned) {
+        continue
+      }
+
+      let folder = nextFolders.find(
+        (item) => item.parentId === parentId && item.name.toLowerCase() === cleaned.toLowerCase(),
+      )
+
+      if (!folder) {
+        folder = {
+          id: createId('folder'),
+          name: cleaned,
+          parentId,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          fixed: false,
+        }
+        await putFolder(folder)
+        nextFolders = [...nextFolders, folder]
+        changed = true
+      }
+
+      parentId = folder.id
+    }
+
+    return { folderId: parentId, nextFolders, changed }
+  }
+
+  async function handleGithubSync({ silent = false } = {}) {
+    const config = getGithubConfig()
+    if (!config) {
+      if (!silent) {
+        showToast('ต้องตั้งค่า GitHub ก่อน')
+      }
+      return
+    }
+
+    setGhSyncing(true)
+    setGhSyncError('')
+    setStatus('กำลังซิงก์จาก GitHub...')
+
+    try {
+      const files = await fetchGithubFileTree(
+        config.owner,
+        config.repo,
+        config.rootPath || GITHUB_ROOT_PATH,
+        config.token,
+      )
+
+      if (!files.length) {
+        setStatus(`ไม่พบไฟล์ใน ${config.rootPath || GITHUB_ROOT_PATH} ของ repo นี้`)
+        if (!silent) {
+          showToast(`ไม่พบไฟล์ .md ใน ${config.rootPath || GITHUB_ROOT_PATH}`)
+        }
+        setGhSyncing(false)
+        return
+      }
+
+      let nextFolders = [...folders]
+      let nextBooks = [...books]
+      const changedBooks = []
+      let foldersChanged = false
+      let added = 0
+      let updated = 0
+      let skipped = 0
+
+      for (const [index, file] of files.entries()) {
+        setStatus(`กำลังซิงก์ ${index + 1}/${files.length}`)
+        const relativePath = stripRootPath(file.path, config.rootPath || GITHUB_ROOT_PATH)
+        const pathSegments = relativePath.split('/').filter(Boolean)
+        const fileName = sanitizeFileName(pathSegments.pop() ?? file.path)
+        const { folderId, nextFolders: updatedFolders, changed } = await ensureFolderPath(
+          nextFolders,
+          pathSegments,
+        )
+
+        if (changed) {
+          nextFolders = updatedFolders
+          foldersChanged = true
+        }
+
+        const existingBySource = nextBooks.find(
+          (book) =>
+            book.source?.type === 'github' &&
+            book.source.repo === config.repoKey &&
+            book.source.path === file.path,
+        )
+
+        if (existingBySource && existingBySource.source?.sha === file.sha) {
+          skipped += 1
+          continue
+        }
+
+        const existingByName = nextBooks.find(
+          (book) =>
+            book.folderId === folderId &&
+            book.fileName.toLowerCase() === fileName.toLowerCase(),
+        )
+
+        const { content, sha } = await fetchGithubFileContent(
+          config.owner,
+          config.repo,
+          file.path,
+          config.token,
+        )
+
+        const source = {
+          type: 'github',
+          repo: config.repoKey,
+          path: file.path,
+          sha: sha ?? file.sha,
+        }
+
+        if (existingBySource || existingByName) {
+          const target = existingBySource ?? existingByName
+          const updatedBook = {
+            ...target,
+            fileName,
+            title: stripExtension(fileName),
+            content,
+            excerpt: extractLead(content),
+            updatedAt: Date.now(),
+            source,
+          }
+          nextBooks = nextBooks.map((book) => (book.id === updatedBook.id ? updatedBook : book))
+          changedBooks.push(updatedBook)
+          updated += 1
+        } else {
+          const newBook = {
+            id: createId('book'),
+            title: stripExtension(fileName),
+            fileName,
+            folderId,
+            content,
+            excerpt: extractLead(content),
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            lastOpenedAt: null,
+            lastReadAt: null,
+            progress: 0,
+            readerFontSize: prefs.fontSize,
+            bookmarks: [],
+            source,
+          }
+          nextBooks = [newBook, ...nextBooks]
+          changedBooks.push(newBook)
+          added += 1
+        }
+      }
+
+      if (foldersChanged) {
+        await syncFolders(nextFolders)
+      }
+      if (changedBooks.length) {
+        await putBooks(changedBooks)
+        await syncBooks(nextBooks)
+      }
+
+      const syncedAt = Date.now()
+      await syncPrefs({
+        ...prefs,
+        github: {
+          ...githubPrefs,
+          lastSyncedAt: syncedAt,
+        },
+      })
+
+      setStatus(`ซิงก์ GitHub แล้ว ใหม่ ${added} • อัปเดต ${updated} • ข้าม ${skipped}`)
+      if (!silent) {
+        showToast('ซิงก์จาก GitHub เสร็จแล้ว')
+      }
+    } catch (error) {
+      setGhSyncError(String(error.message ?? error))
+      setStatus('ซิงก์ GitHub ไม่สำเร็จ')
+      showToast('ซิงก์ GitHub ไม่สำเร็จ')
+    } finally {
+      setGhSyncing(false)
+    }
   }
 
   async function handleGithubFetch() {
@@ -1060,11 +1624,16 @@ function App() {
     setGhFiles([])
     setGhSelected(new Set())
     try {
-      const files = await fetchGithubFileTree(parsed.owner, parsed.repo, ghToken.trim())
+      const files = await fetchGithubFileTree(
+        parsed.owner,
+        parsed.repo,
+        githubPrefs.rootPath || GITHUB_ROOT_PATH,
+        ghToken.trim(),
+      )
       setGhFiles(files)
-      setGhSelected(new Set(files))
+      setGhSelected(new Set(files.map((file) => file.path)))
       setGhStatus('idle')
-      if (!files.length) setGhError('ไม่พบไฟล์ .md / .txt ใน repo นี้')
+      if (!files.length) setGhError(`ไม่พบไฟล์ .md ใน ${githubPrefs.rootPath || GITHUB_ROOT_PATH}`)
     } catch (error) {
       setGhStatus('error')
       setGhError(String(error.message ?? error))
@@ -1079,15 +1648,16 @@ function App() {
     setGhError('')
     try {
       const selectedPaths = [...ghSelected]
+      const fileMap = new Map(ghFiles.map((file) => [file.path, file]))
       const incomingBooks = await Promise.all(
         selectedPaths.map(async (filePath) => {
-          const content = await fetchGithubFileContent(
+          const { content, sha } = await fetchGithubFileContent(
             parsed.owner,
             parsed.repo,
             filePath,
             ghToken.trim(),
           )
-          const fileName = filePath.split('/').pop() || filePath
+          const fileName = sanitizeFileName(filePath.split('/').pop() || filePath)
           return {
             id: createId('book'),
             title: stripExtension(fileName),
@@ -1102,6 +1672,12 @@ function App() {
             progress: 0,
             readerFontSize: prefs.fontSize,
             bookmarks: [],
+            source: {
+              type: 'github',
+              repo: `${parsed.owner}/${parsed.repo}`,
+              path: filePath,
+              sha: sha ?? fileMap.get(filePath)?.sha ?? null,
+            },
           }
         }),
       )
@@ -1122,7 +1698,10 @@ function App() {
         await syncBooks([...acceptedBooks, ...books])
       }
       if (duplicates.length) showToast(`ข้าม ${duplicates.length} ไฟล์ที่ชื่อซ้ำ`)
-      if (acceptedBooks.length) showToast(`นำเข้าจาก GitHub ${acceptedBooks.length} เล่มแล้ว`)
+      if (acceptedBooks.length) {
+        showToast(`นำเข้าจาก GitHub ${acceptedBooks.length} เล่มแล้ว`)
+        setStatus(`นำเข้าจาก GitHub ${acceptedBooks.length} เล่มแล้ว`)
+      }
       setGhStatus('idle')
       closeGhModal()
     } catch (error) {
@@ -1206,6 +1785,7 @@ function App() {
               <p className="eyebrow">Current Shelf</p>
               <h2>{currentFolder?.name ?? 'กำลังโหลดโฟลเดอร์'}</h2>
               <div className="library-status-line">{status}</div>
+              <div className="library-status-sub">{githubSummary}</div>
             </div>
 
             <div className="folder-actions">
@@ -1364,8 +1944,19 @@ function App() {
             <button type="button" className="ghost-button" onClick={() => openFolderEditor('create')}>
               {currentFolder?.parentId ? 'เพิ่มโฟลเดอร์ย่อย' : 'เพิ่มโฟลเดอร์'}
             </button>
-            <button type="button" className="ghost-button" onClick={() => setGhModalOpen(true)}>
+            <button
+              type="button"
+              className="ghost-button"
+              onClick={() => handleGithubSync()}
+              disabled={ghSyncing}
+            >
+              {ghSyncing ? 'กำลังซิงก์...' : 'ซิงก์ GitHub'}
+            </button>
+            <button type="button" className="ghost-button" onClick={openGhModal} disabled={ghSyncing}>
               นำเข้าจาก GitHub
+            </button>
+            <button type="button" className="ghost-button" onClick={openGhSettings}>
+              ตั้งค่า GitHub
             </button>
             <button type="button" className="ghost-button" onClick={handleShareBackup}>
               แบ็กอัป
@@ -1398,6 +1989,10 @@ function App() {
               <article>
                 <strong>กู้คืนข้อมูล</strong>
                 <p>กด “กู้คืน” แล้วเลือกไฟล์แบ็กอัปเก่าเพื่อเอาคลังหนังสือกลับมา</p>
+              </article>
+              <article>
+                <strong>GitHub Cloud</strong>
+                <p>ตั้งค่า GitHub แล้วกด “ซิงก์ GitHub” เพื่อดึงไฟล์จาก {GITHUB_ROOT_PATH}</p>
               </article>
               <article>
                 <strong>โหมดจัดเก็บ</strong>
@@ -1568,6 +2163,7 @@ function App() {
           <div className="modal-card gh-modal" onClick={(event) => event.stopPropagation()}>
             <p className="eyebrow">GitHub Sync</p>
             <h3>นำเข้าไฟล์จาก GitHub</h3>
+            <p className="gh-token-note">ระบบจะค้นหาไฟล์ใน {GITHUB_ROOT_PATH}</p>
 
             <div className="gh-field-group">
               <label className="gh-label">GitHub Repository</label>
@@ -1601,7 +2197,11 @@ function App() {
                 <div className="gh-file-header">
                   <span>พบ {ghFiles.length} ไฟล์ — เลือก {ghSelected.size} ไฟล์</span>
                   <div className="gh-file-header-actions">
-                    <button type="button" className="gh-text-btn" onClick={() => setGhSelected(new Set(ghFiles))}>
+                    <button
+                      type="button"
+                      className="gh-text-btn"
+                      onClick={() => setGhSelected(new Set(ghFiles.map((file) => file.path)))}
+                    >
                       เลือกทั้งหมด
                     </button>
                     <button type="button" className="gh-text-btn" onClick={() => setGhSelected(new Set())}>
@@ -1610,21 +2210,21 @@ function App() {
                   </div>
                 </div>
                 <ul className="gh-file-list">
-                  {ghFiles.map((filePath) => (
-                    <li key={filePath} className="gh-file-item">
+                  {ghFiles.map((file) => (
+                    <li key={file.path} className="gh-file-item">
                       <label>
                         <input
                           type="checkbox"
-                          checked={ghSelected.has(filePath)}
+                          checked={ghSelected.has(file.path)}
                           onChange={() =>
                             setGhSelected((previous) => {
                               const next = new Set(previous)
-                              next.has(filePath) ? next.delete(filePath) : next.add(filePath)
+                              next.has(file.path) ? next.delete(file.path) : next.add(file.path)
                               return next
                             })
                           }
                         />
-                        <span>{filePath}</span>
+                        <span>{file.path}</span>
                       </label>
                     </li>
                   ))}
@@ -1657,6 +2257,71 @@ function App() {
               )}
             </div>
           </div>
+        </div>
+      ) : null}
+
+      {ghSettingsOpen ? (
+        <div className="modal-overlay" onClick={closeGhSettings}>
+          <form className="modal-card gh-modal gh-settings" onClick={(event) => event.stopPropagation()} onSubmit={handleSaveGhSettings}>
+            <p className="eyebrow">GitHub Cloud</p>
+            <h3>ตั้งค่า GitHub Cloud</h3>
+
+            <div className="gh-field-group">
+              <label className="gh-label">GitHub Repository</label>
+              <input
+                type="text"
+                className="gh-input"
+                value={ghSettingsDraft.repo}
+                onChange={(event) => setGhSettingsDraft((current) => ({ ...current, repo: event.target.value }))}
+                placeholder="owner/repo หรือ https://github.com/owner/repo"
+              />
+            </div>
+
+            <div className="gh-field-group">
+              <label className="gh-label">Personal Access Token</label>
+              <input
+                type="password"
+                className="gh-input"
+                value={ghSettingsDraft.token}
+                onChange={(event) => setGhSettingsDraft((current) => ({ ...current, token: event.target.value }))}
+                placeholder="ghp_xxxxxxxxxxxx"
+              />
+              <p className="gh-token-note">Token จะถูกเก็บไว้ในเครื่องนี้เพื่อให้อัปโหลดไฟล์ได้ (ต้องมีสิทธิ์เขียน repo)</p>
+            </div>
+
+            <div className="gh-field-group">
+              <label className="gh-label">โหมดการซิงก์</label>
+              <select
+                className="gh-input"
+                value={ghSettingsDraft.syncMode}
+                onChange={(event) => setGhSettingsDraft((current) => ({ ...current, syncMode: event.target.value }))}
+              >
+                <option value="manual">กดซิงก์เอง</option>
+                <option value="auto">ซิงก์อัตโนมัติเมื่อเปิดแอป</option>
+              </select>
+            </div>
+
+            <div className="gh-note">
+              <p><strong>โฟลเดอร์ที่ใช้อัปโหลด:</strong> {GITHUB_ROOT_PATH}</p>
+              <ul>
+                <li>ชื่อไฟล์ต้องไม่ซ้ำกันในโฟลเดอร์เดียวกัน (ไม่แยกตัวพิมพ์เล็ก-ใหญ่)</li>
+                <li>รองรับเฉพาะ .md, .markdown, .txt</li>
+                <li>ห้ามมี / หรือ \\ ในชื่อไฟล์</li>
+              </ul>
+              <small>{githubSummary}</small>
+            </div>
+
+            {ghSyncError ? <p className="gh-error">{ghSyncError}</p> : null}
+
+            <div className="modal-actions">
+              <button type="button" className="ghost-button" onClick={closeGhSettings}>
+                ปิด
+              </button>
+              <button type="submit" className="primary-button">
+                บันทึกการตั้งค่า
+              </button>
+            </div>
+          </form>
         </div>
       ) : null}
 

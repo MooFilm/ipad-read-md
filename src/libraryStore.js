@@ -10,6 +10,13 @@ const defaultPrefs = {
   fontSize: 18,
   lastBackupAt: null,
   lastBackupReminderDismissedAt: null,
+  github: {
+    repo: '',
+    token: '',
+    syncMode: 'manual',
+    rootPath: 'public/docs',
+    lastSyncedAt: null,
+  },
 }
 
 let dbPromise = null
@@ -76,28 +83,43 @@ function readFallbackSnapshot() {
     return {
       folders: Array.isArray(snapshot.folders) ? snapshot.folders : [],
       books: Array.isArray(snapshot.books) ? snapshot.books : [],
-      prefs: { ...defaultPrefs, ...(snapshot.prefs ?? {}) },
+      prefs: normalizePrefs(snapshot.prefs),
       storageMode: 'localStorage',
     }
   } catch {
     return {
       folders: [],
       books: [],
-      prefs: { ...defaultPrefs },
+      prefs: normalizePrefs(),
       storageMode: 'localStorage',
     }
   }
 }
 
 function writeFallbackSnapshot(snapshot) {
+  const normalizedPrefs = normalizePrefs(snapshot.prefs)
   localStorage.setItem(
     FALLBACK_KEY,
     JSON.stringify({
       folders: snapshot.folders ?? [],
       books: snapshot.books ?? [],
-      prefs: snapshot.prefs ?? defaultPrefs,
+      prefs: normalizedPrefs,
     }),
   )
+}
+
+export function normalizePrefs(prefs = {}) {
+  const merged = {
+    ...defaultPrefs,
+    ...prefs,
+  }
+
+  merged.github = {
+    ...defaultPrefs.github,
+    ...(prefs.github ?? {}),
+  }
+
+  return merged
 }
 
 async function runWithFallback(indexedDbWork, fallbackWork) {
@@ -133,7 +155,7 @@ export async function getLibrarySnapshot() {
       return {
         folders,
         books,
-        prefs: { ...defaultPrefs, ...(prefsRecord?.value ?? {}) },
+        prefs: normalizePrefs(prefsRecord?.value),
         storageMode: 'indexedDB',
       }
     },
@@ -227,22 +249,24 @@ export async function deleteBook(bookId) {
 }
 
 export async function putPrefs(prefs) {
+  const normalized = normalizePrefs(prefs)
   return runWithFallback(
     async (db) => {
       const transaction = db.transaction(META_STORE, 'readwrite')
-      transaction.objectStore(META_STORE).put({ key: 'prefs', value: prefs })
+      transaction.objectStore(META_STORE).put({ key: 'prefs', value: normalized })
       await transactionDone(transaction)
-      return prefs
+      return normalized
     },
     async () => {
       const snapshot = readFallbackSnapshot()
-      writeFallbackSnapshot({ ...snapshot, prefs })
-      return prefs
+      writeFallbackSnapshot({ ...snapshot, prefs: normalized })
+      return normalized
     },
   )
 }
 
 export async function replaceLibrary(snapshot) {
+  const normalizedPrefs = normalizePrefs(snapshot.prefs)
   return runWithFallback(
     async (db) => {
       const transaction = db.transaction([FOLDER_STORE, BOOK_STORE, META_STORE], 'readwrite')
@@ -252,7 +276,7 @@ export async function replaceLibrary(snapshot) {
 
       foldersStore.clear()
       booksStore.clear()
-      metaStore.put({ key: 'prefs', value: snapshot.prefs ?? defaultPrefs })
+      metaStore.put({ key: 'prefs', value: normalizedPrefs })
 
       ;(snapshot.folders ?? []).forEach((folder) => foldersStore.put(folder))
       ;(snapshot.books ?? []).forEach((book) => booksStore.put(book))
@@ -264,7 +288,7 @@ export async function replaceLibrary(snapshot) {
       writeFallbackSnapshot({
         folders: snapshot.folders ?? [],
         books: snapshot.books ?? [],
-        prefs: snapshot.prefs ?? defaultPrefs,
+        prefs: normalizedPrefs,
       })
       return true
     },

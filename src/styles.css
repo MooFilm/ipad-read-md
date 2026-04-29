@@ -307,6 +307,13 @@ select {
   line-height: 1.6;
 }
 
+.library-status-sub {
+  margin-top: 0.15rem;
+  color: var(--ink-soft);
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+
 .folder-tree {
   display: grid;
   gap: 0.35rem;
@@ -1130,6 +1137,10 @@ select {
   overflow-y: auto;
 }
 
+.gh-settings {
+  width: min(580px, 100%);
+}
+
 .gh-field-group {
   margin-top: 0.9rem;
 }
@@ -1168,6 +1179,32 @@ select {
   font-size: 0.82rem;
   color: var(--ink-muted);
   line-height: 1.5;
+}
+
+.gh-note {
+  margin-top: 1rem;
+  padding: 0.85rem 1rem;
+  border-radius: 14px;
+  border: 1px dashed rgba(212, 139, 23, 0.3);
+  background: rgba(212, 139, 23, 0.08);
+  color: var(--ink-soft);
+  font-size: 0.88rem;
+  line-height: 1.6;
+}
+
+.gh-note ul {
+  margin: 0.45rem 0 0;
+  padding-left: 1.2rem;
+}
+
+.gh-note li {
+  margin-bottom: 0.2rem;
+}
+
+.gh-note small {
+  display: block;
+  margin-top: 0.45rem;
+  color: var(--ink-muted);
 }
 
 .gh-error {
