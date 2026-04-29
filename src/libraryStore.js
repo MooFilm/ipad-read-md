@@ -10,6 +10,8 @@ const defaultPrefs = {
   fontSize: 18,
   lastBackupAt: null,
   lastBackupReminderDismissedAt: null,
+  ghBackupRepo: '',
+  ghBackupPath: 'readshelf-backup.json',
 }
 
 let dbPromise = null
