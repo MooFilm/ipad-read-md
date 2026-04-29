@@ -276,7 +276,7 @@ function parseGithubRepo(input) {
 }
 
 function normalizeGithubPath(pathValue, fallback = 'readshelf-backup.json') {
-  const trimmed = (pathValue ?? '').trim().replace(/^\/+/, '')
+  const trimmed = (pathValue ?? '').trim().replace(/^\/+/, '').replace(/\/+$/, '')
   return trimmed || fallback
 }
 
@@ -289,11 +289,11 @@ function encodeGithubPath(filePath) {
 
 function encodeBase64(content) {
   const bytes = new TextEncoder().encode(content)
-  let binary = ''
+  const chars = []
   bytes.forEach((byte) => {
-    binary += String.fromCharCode(byte)
+    chars.push(String.fromCharCode(byte))
   })
-  return btoa(binary)
+  return btoa(chars.join(''))
 }
 
 async function fetchGithubFileTree(owner, repo, token) {
