@@ -329,6 +329,18 @@ function encodeGithubPath(path) {
     .join('/')
 }
 
+function encodeBase64Utf8(value) {
+  const bytes = new TextEncoder().encode(value ?? '')
+  const chunkSize = 0x8000
+  let binary = ''
+
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.slice(index, index + chunkSize))
+  }
+
+  return btoa(binary)
+}
+
 function stripRootPath(path, rootPath) {
   const normalizedRoot = rootPath.replace(/^\/+|\/+$/g, '')
   const normalizedPath = path.replace(/^\/+|\/+$/g, '')
@@ -437,7 +449,7 @@ async function uploadGithubFile({ owner, repo, filePath, content, message, token
     ...buildGithubHeaders(token),
     'Content-Type': 'application/json',
   }
-  const encodedContent = btoa(unescape(encodeURIComponent(content)))
+  const encodedContent = encodeBase64Utf8(content)
   const res = await fetch(
     `https://api.github.com/repos/${owner}/${repo}/contents/${encodeGithubPath(filePath)}`,
     {
