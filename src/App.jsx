@@ -301,7 +301,7 @@ function sanitizePathSegment(value) {
     .trim()
 }
 
-function normalizeCase(value) {
+function normalizeToLowerCase(value) {
   return String(value ?? '').toLocaleLowerCase()
 }
 
@@ -331,11 +331,11 @@ function encodeGithubPath(path) {
 
 function encodeBase64Utf8(value) {
   const bytes = new TextEncoder().encode(value ?? '')
-  const chunkSize = 0x8000
+  const base64ChunkSize = 0x8000
   let binary = ''
 
-  for (let index = 0; index < bytes.length; index += chunkSize) {
-    binary += String.fromCharCode(...bytes.slice(index, index + chunkSize))
+  for (let index = 0; index < bytes.length; index += base64ChunkSize) {
+    binary += String.fromCharCode(...bytes.slice(index, index + base64ChunkSize))
   }
 
   return btoa(binary)
@@ -905,7 +905,7 @@ function App() {
 
     targetName = sanitizeFileName(renamed)
     const hasLocalDuplicate = existingBooks.some(
-      (book) => book.folderId === folderId && normalizeCase(book.fileName) === normalizeCase(targetName),
+      (book) => book.folderId === folderId && normalizeToLowerCase(book.fileName) === normalizeToLowerCase(targetName),
     )
 
     if (hasLocalDuplicate) {
@@ -963,7 +963,7 @@ function App() {
       books.some(
         (book) =>
           book.folderId === incoming.folderId &&
-          normalizeCase(book.fileName) === normalizeCase(incoming.fileName),
+          normalizeToLowerCase(book.fileName) === normalizeToLowerCase(incoming.fileName),
       ),
     )
 
@@ -1461,7 +1461,7 @@ function App() {
       }
 
       let folder = nextFolders.find(
-        (item) => item.parentId === parentId && normalizeCase(item.name) === normalizeCase(cleaned),
+        (item) => item.parentId === parentId && normalizeToLowerCase(item.name) === normalizeToLowerCase(cleaned),
       )
 
       if (!folder) {
@@ -1556,7 +1556,7 @@ function App() {
         const existingByName = nextBooks.find(
           (book) =>
             book.folderId === folderId &&
-            normalizeCase(book.fileName) === normalizeCase(fileName),
+            normalizeToLowerCase(book.fileName) === normalizeToLowerCase(fileName),
         )
 
         const { content, sha } = await fetchGithubFileContent(
@@ -1713,7 +1713,7 @@ function App() {
         books.some(
           (book) =>
             book.folderId === incoming.folderId &&
-            normalizeCase(book.fileName) === normalizeCase(incoming.fileName),
+            normalizeToLowerCase(book.fileName) === normalizeToLowerCase(incoming.fileName),
         ),
       )
       const acceptedBooks = incomingBooks.filter(
