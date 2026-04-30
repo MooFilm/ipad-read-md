@@ -1460,8 +1460,9 @@ function App() {
         continue
       }
 
+      const normalizedSegment = normalizeToLowerCase(cleaned)
       let folder = nextFolders.find(
-        (item) => item.parentId === parentId && normalizeToLowerCase(item.name) === normalizeToLowerCase(cleaned),
+        (item) => item.parentId === parentId && normalizeToLowerCase(item.name) === normalizedSegment,
       )
 
       if (!folder) {
