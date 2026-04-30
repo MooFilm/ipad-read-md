@@ -301,6 +301,10 @@ function sanitizePathSegment(value) {
     .trim()
 }
 
+function normalizeCase(value) {
+  return String(value ?? '').toLocaleLowerCase()
+}
+
 function ensureFileExtension(fileName) {
   if (!fileName) {
     return 'untitled.md'
@@ -334,7 +338,7 @@ function stripRootPath(path, rootPath) {
   if (normalizedPath === normalizedRoot) {
     return ''
   }
-  return normalizedPath
+  return null
 }
 
 function buildGithubHeaders(token) {
@@ -889,7 +893,7 @@ function App() {
 
     targetName = sanitizeFileName(renamed)
     const hasLocalDuplicate = existingBooks.some(
-      (book) => book.folderId === folderId && book.fileName.toLowerCase() === targetName.toLowerCase(),
+      (book) => book.folderId === folderId && normalizeCase(book.fileName) === normalizeCase(targetName),
     )
 
     if (hasLocalDuplicate) {
@@ -947,7 +951,7 @@ function App() {
       books.some(
         (book) =>
           book.folderId === incoming.folderId &&
-          book.fileName.toLowerCase() === incoming.fileName.toLowerCase(),
+          normalizeCase(book.fileName) === normalizeCase(incoming.fileName),
       ),
     )
 
@@ -1445,7 +1449,7 @@ function App() {
       }
 
       let folder = nextFolders.find(
-        (item) => item.parentId === parentId && item.name.toLowerCase() === cleaned.toLowerCase(),
+        (item) => item.parentId === parentId && normalizeCase(item.name) === normalizeCase(cleaned),
       )
 
       if (!folder) {
@@ -1509,6 +1513,10 @@ function App() {
       for (const [index, file] of files.entries()) {
         setStatus(`กำลังซิงก์ ${index + 1}/${files.length}`)
         const relativePath = stripRootPath(file.path, config.rootPath || GITHUB_ROOT_PATH)
+        if (relativePath === null) {
+          skipped += 1
+          continue
+        }
         const pathSegments = relativePath.split('/').filter(Boolean)
         const fileName = sanitizeFileName(pathSegments.pop() ?? file.path)
         const { folderId, nextFolders: updatedFolders, changed } = await ensureFolderPath(
@@ -1536,7 +1544,7 @@ function App() {
         const existingByName = nextBooks.find(
           (book) =>
             book.folderId === folderId &&
-            book.fileName.toLowerCase() === fileName.toLowerCase(),
+            normalizeCase(book.fileName) === normalizeCase(fileName),
         )
 
         const { content, sha } = await fetchGithubFileContent(
@@ -1693,7 +1701,7 @@ function App() {
         books.some(
           (book) =>
             book.folderId === incoming.folderId &&
-            book.fileName.toLowerCase() === incoming.fileName.toLowerCase(),
+            normalizeCase(book.fileName) === normalizeCase(incoming.fileName),
         ),
       )
       const acceptedBooks = incomingBooks.filter(
