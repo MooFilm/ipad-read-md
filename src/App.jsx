@@ -59,7 +59,6 @@ const STORAGE_MODE_LABEL = {
   indexedDB: 'IndexedDB',
   localStorage: 'localStorage',
 }
-const GITHUB_ROOT_PATH = defaultPrefs.github.rootPath
 const MARKDOWN_FILE_PATTERN = /\.(md|markdown|txt)$/i
 
 function isSameCalendarDay(leftValue, rightValue) {
@@ -526,6 +525,7 @@ function App() {
   const githubPrefs = prefs.github ?? defaultPrefs.github
   const githubRepoKey = githubPrefs.repo?.trim() ?? ''
   const githubToken = githubPrefs.token?.trim() ?? ''
+  const githubRootPath = githubPrefs.rootPath || defaultPrefs.github.rootPath
 
   const activeBook = useMemo(
     () => books.find((book) => book.id === activeBookId) ?? null,
@@ -865,7 +865,7 @@ function App() {
       repo: parsed.repo,
       repoKey: `${parsed.owner}/${parsed.repo}`,
       token: githubToken,
-      rootPath: githubPrefs.rootPath || GITHUB_ROOT_PATH,
+      rootPath: githubRootPath,
     }
   }
 
@@ -1501,14 +1501,14 @@ function App() {
       const files = await fetchGithubFileTree(
         config.owner,
         config.repo,
-        config.rootPath || GITHUB_ROOT_PATH,
+        config.rootPath || githubRootPath,
         config.token,
       )
 
       if (!files.length) {
-        setStatus(`ไม่พบไฟล์ใน ${config.rootPath || GITHUB_ROOT_PATH} ของ repo นี้`)
+        setStatus(`ไม่พบไฟล์ใน ${config.rootPath || githubRootPath} ของ repo นี้`)
         if (!silent) {
-          showToast(`ไม่พบไฟล์ .md ใน ${config.rootPath || GITHUB_ROOT_PATH}`)
+          showToast(`ไม่พบไฟล์ .md ใน ${config.rootPath || githubRootPath}`)
         }
         setGhSyncing(false)
         return
@@ -1524,7 +1524,7 @@ function App() {
 
       for (const [index, file] of files.entries()) {
         setStatus(`กำลังซิงก์ ${index + 1}/${files.length}`)
-        const relativePath = stripRootPath(file.path, config.rootPath || GITHUB_ROOT_PATH)
+        const relativePath = stripRootPath(file.path, config.rootPath || githubRootPath)
         if (relativePath === null) {
           skipped += 1
           continue
@@ -1654,13 +1654,13 @@ function App() {
       const files = await fetchGithubFileTree(
         parsed.owner,
         parsed.repo,
-        githubPrefs.rootPath || GITHUB_ROOT_PATH,
+        githubRootPath,
         ghToken.trim(),
       )
       setGhFiles(files)
       setGhSelected(new Set(files.map((file) => file.path)))
       setGhStatus('idle')
-      if (!files.length) setGhError(`ไม่พบไฟล์ .md ใน ${githubPrefs.rootPath || GITHUB_ROOT_PATH}`)
+      if (!files.length) setGhError(`ไม่พบไฟล์ .md ใน ${githubRootPath}`)
     } catch (error) {
       setGhStatus('error')
       setGhError(String(error.message ?? error))
@@ -2019,7 +2019,7 @@ function App() {
               </article>
               <article>
                 <strong>GitHub Cloud</strong>
-                <p>ตั้งค่า GitHub แล้วกด “ซิงก์ GitHub” เพื่อดึงไฟล์จาก {GITHUB_ROOT_PATH}</p>
+                <p>ตั้งค่า GitHub แล้วกด “ซิงก์ GitHub” เพื่อดึงไฟล์จาก {githubRootPath}</p>
               </article>
               <article>
                 <strong>โหมดจัดเก็บ</strong>
@@ -2190,7 +2190,7 @@ function App() {
           <div className="modal-card gh-modal" onClick={(event) => event.stopPropagation()}>
             <p className="eyebrow">GitHub Sync</p>
             <h3>นำเข้าไฟล์จาก GitHub</h3>
-            <p className="gh-token-note">ระบบจะค้นหาไฟล์ใน {GITHUB_ROOT_PATH}</p>
+            <p className="gh-token-note">ระบบจะค้นหาไฟล์ใน {githubRootPath}</p>
 
             <div className="gh-field-group">
               <label className="gh-label">GitHub Repository</label>
@@ -2329,7 +2329,7 @@ function App() {
             </div>
 
             <div className="gh-note">
-              <p><strong>โฟลเดอร์ที่ใช้อัปโหลด:</strong> {GITHUB_ROOT_PATH}</p>
+              <p><strong>โฟลเดอร์ที่ใช้อัปโหลด:</strong> {githubRootPath}</p>
               <ul>
                 <li>ชื่อไฟล์ต้องไม่ซ้ำกันในโฟลเดอร์เดียวกัน (ไม่แยกตัวพิมพ์เล็ก-ใหญ่)</li>
                 <li>รองรับเฉพาะ .md, .markdown, .txt</li>
