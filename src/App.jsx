@@ -770,32 +770,6 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (isBooting) {
-      return
-    }
-
-    if (autoSyncRef.current) {
-      return
-    }
-
-    if (githubPrefs.syncMode !== 'auto' || !githubRepoKey) {
-      return
-    }
-
-    autoSyncRef.current = true
-    void handleGithubSync({ silent: true })
-  }, [isBooting, githubPrefs.syncMode, githubRepoKey])
-
-  useEffect(() => {
-    if (isBooting || !initialSyncQueued) {
-      return
-    }
-
-    setInitialSyncQueued(false)
-    void handleGithubSync({ silent: true })
-  }, [isBooting, initialSyncQueued, handleGithubSync])
-
-  useEffect(() => {
     if (toastTimerRef.current) {
       window.clearTimeout(toastTimerRef.current)
     }
@@ -1556,7 +1530,7 @@ function App() {
     setGhSettingsOpen(false)
   }
 
-  async function ensureFolderPath(existingFolders, segments) {
+  const ensureFolderPath = useCallback(async (existingFolders, segments) => {
     let nextFolders = [...existingFolders]
     let parentId = DEFAULT_FOLDER_ID
     let changed = false
@@ -1590,7 +1564,7 @@ function App() {
     }
 
     return { folderId: parentId, nextFolders, changed }
-  }
+  }, [])
 
   const handleGithubSync = useCallback(
     async ({ silent = false } = {}) => {
@@ -1771,6 +1745,32 @@ function App() {
       syncPrefs,
     ],
   )
+
+  useEffect(() => {
+    if (isBooting) {
+      return
+    }
+
+    if (autoSyncRef.current) {
+      return
+    }
+
+    if (githubPrefs.syncMode !== 'auto' || !githubRepoKey) {
+      return
+    }
+
+    autoSyncRef.current = true
+    void handleGithubSync({ silent: true })
+  }, [githubPrefs.syncMode, githubRepoKey, handleGithubSync, isBooting])
+
+  useEffect(() => {
+    if (isBooting || !initialSyncQueued) {
+      return
+    }
+
+    setInitialSyncQueued(false)
+    void handleGithubSync({ silent: true })
+  }, [handleGithubSync, initialSyncQueued, isBooting])
 
   async function handleGithubFetch() {
     const parsed = parseGithubRepo(ghRepo)
