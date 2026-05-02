@@ -703,8 +703,20 @@ function App() {
 
       let nextPrefs = normalizePrefs(snapshot.prefs)
       let configApplied = false
+      let prefsChanged = false
 
-      if (appConfig?.github?.repo && !nextPrefs.github.configApplied && !nextPrefs.github.repo) {
+      if (nextPrefs.github.repo && !nextPrefs.github.configApplied) {
+        nextPrefs = normalizePrefs({
+          ...nextPrefs,
+          github: {
+            ...nextPrefs.github,
+            configApplied: true,
+          },
+        })
+        prefsChanged = true
+      }
+
+      if (appConfig?.github?.repo && !nextPrefs.github.configApplied) {
         nextPrefs = normalizePrefs({
           ...nextPrefs,
           github: {
@@ -717,8 +729,12 @@ function App() {
             lastSyncedAt: null,
           },
         })
-        await putPrefs(nextPrefs)
+        prefsChanged = true
         configApplied = true
+      }
+
+      if (prefsChanged) {
+        await putPrefs(nextPrefs)
       }
 
       let nextFolders = snapshot.folders
@@ -743,7 +759,8 @@ function App() {
       setCurrentFolderId(
         nextFolders.find((folder) => folder.id === DEFAULT_FOLDER_ID)?.id ?? nextFolders[0]?.id ?? DEFAULT_FOLDER_ID,
       )
-      if (configApplied && nextPrefs.github.syncMode !== 'auto') {
+      const shouldQueueInitialSync = configApplied && nextPrefs.github.syncMode === 'manual'
+      if (shouldQueueInitialSync) {
         setInitialSyncQueued(true)
       }
       setIsBooting(false)
@@ -780,7 +797,7 @@ function App() {
 
     setInitialSyncQueued(false)
     void handleGithubSync({ silent: true })
-  }, [isBooting, initialSyncQueued, handleGithubSync])
+  }, [isBooting, initialSyncQueued])
 
   useEffect(() => {
     if (toastTimerRef.current) {
@@ -1074,7 +1091,7 @@ function App() {
       if (shouldUpload) {
         if (!canUpload) {
           if (!warnedMissingToken) {
-            showToast('ต้องใส่ GitHub token ก่อนจึงจะอัปโหลดได้')
+            showToast('ต้องใส่ GitHub token ในหน้า “ตั้งค่า GitHub” ก่อนจึงจะอัปโหลดได้')
             warnedMissingToken = true
           }
         } else {
