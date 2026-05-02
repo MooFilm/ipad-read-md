@@ -706,9 +706,9 @@ function App() {
       let prefsChanged = false
 
       const hasStoredRepo = Boolean(nextPrefs.github.repo)
-      let hasConfigAppliedFlag = Boolean(nextPrefs.github.configApplied)
+      let configAlreadyApplied = Boolean(nextPrefs.github.configApplied)
 
-      if (hasStoredRepo && !hasConfigAppliedFlag) {
+      if (hasStoredRepo && !configAlreadyApplied) {
         nextPrefs = normalizePrefs({
           ...nextPrefs,
           github: {
@@ -717,10 +717,10 @@ function App() {
           },
         })
         prefsChanged = true
-        hasConfigAppliedFlag = true
+        configAlreadyApplied = true
       }
 
-      if (appConfig?.github?.repo && !hasConfigAppliedFlag) {
+      if (appConfig?.github?.repo && !configAlreadyApplied) {
         nextPrefs = normalizePrefs({
           ...nextPrefs,
           github: {
@@ -763,8 +763,8 @@ function App() {
       setCurrentFolderId(
         nextFolders.find((folder) => folder.id === DEFAULT_FOLDER_ID)?.id ?? nextFolders[0]?.id ?? DEFAULT_FOLDER_ID,
       )
-      const shouldQueueInitialSync = configApplied && nextPrefs.github.syncMode === 'manual'
-      if (shouldQueueInitialSync) {
+      const shouldRunInitialSync = configApplied && nextPrefs.github.syncMode === 'manual'
+      if (shouldRunInitialSync) {
         setInitialSyncQueued(true)
       }
       setIsBooting(false)
@@ -801,7 +801,7 @@ function App() {
 
     setInitialSyncQueued(false)
     void handleGithubSync({ silent: true })
-  }, [isBooting, initialSyncQueued])
+  }, [isBooting, initialSyncQueued, handleGithubSync])
 
   useEffect(() => {
     if (toastTimerRef.current) {
