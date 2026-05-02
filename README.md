@@ -38,6 +38,18 @@ npm run dev -- --host
 https://YOUR-USERNAME.github.io/YOUR-REPOSITORY/
 ```
 
+## ใช้งานแบบไม่ต้องใช้ Git CLI (แนะนำ)
+
+ถ้าต้องการอัปโหลดไฟล์จากคอมแล้วเปิดอ่านบน iPad ได้ทันที โดยไม่ต้องใช้ git CLI:
+
+1. ไปที่ `public/readshelf.config.json` แล้วใส่ค่า repo (เช่น `owner/repo`)
+2. ตั้ง `syncMode` เป็น `"auto"` เพื่อให้ซิงก์อัตโนมัติเมื่อเปิดแอป
+3. push ไฟล์ขึ้น GitHub (ทำผ่านเว็บ GitHub ได้)
+4. อัปโหลดไฟล์ .md ผ่านหน้าเว็บ GitHub ไปที่โฟลเดอร์ `public/docs`
+5. เปิด GitHub Pages บน iPad → ระบบจะซิงก์ให้อัตโนมัติแบบอ่านอย่างเดียว
+
+> แนะนำให้ใช้ repo แบบ public เพื่อให้ซิงก์ได้โดยไม่ต้องใส่ token
+
 ## วิธีใช้งานจริง
 
 1. เปิดเว็บแอปบน iPad
@@ -51,10 +63,11 @@ https://YOUR-USERNAME.github.io/YOUR-REPOSITORY/
 
 เมื่ออยากเปิดอ่านจากหลายอุปกรณ์:
 
-1. กด `ตั้งค่า GitHub`
-2. ใส่ `owner/repo` และ Personal Access Token (ต้องมีสิทธิ์เขียน repo)
-3. ระบบจะใช้โฟลเดอร์ `public/docs` เป็นที่เก็บไฟล์
-4. กด `ซิงก์ GitHub` เพื่อดึงไฟล์ล่าสุดจาก repo
+1. ถ้า repo เป็น public ให้ตั้งค่าใน `public/readshelf.config.json` เพื่อซิงก์แบบอ่านอย่างเดียว
+2. ถ้าต้องการอัปโหลดจาก iPad ให้กด `ตั้งค่า GitHub`
+3. ใส่ `owner/repo` และ Personal Access Token (ต้องมีสิทธิ์เขียน repo)
+4. ระบบจะใช้โฟลเดอร์ `public/docs` เป็นที่เก็บไฟล์
+5. กด `ซิงก์ GitHub` เพื่อดึงไฟล์ล่าสุดจาก repo
 
 กติกาชื่อไฟล์และโฟลเดอร์:
 

@@ -15,6 +15,8 @@ const defaultPrefs = {
     token: '',
     syncMode: 'manual',
     rootPath: 'public/docs',
+    uploadEnabled: false,
+    configApplied: false,
     lastSyncedAt: null,
   },
 }

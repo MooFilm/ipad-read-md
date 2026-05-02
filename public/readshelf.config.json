@@ -1,0 +1,8 @@
+{
+  "github": {
+    "repo": "",
+    "rootPath": "public/docs",
+    "syncMode": "auto",
+    "uploadEnabled": false
+  }
+}
