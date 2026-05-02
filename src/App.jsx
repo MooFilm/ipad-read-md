@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import {
   defaultPrefs,
@@ -663,11 +663,10 @@ function App() {
       return 'ยังไม่ได้เชื่อมต่อ GitHub'
     }
 
-    const uploadLabel = githubUploadRequested
-      ? githubUploadReady
-        ? 'พร้อมอัปโหลด'
-        : 'รอใส่ token เพื่ออัปโหลด'
-      : 'อ่านอย่างเดียว'
+    let uploadLabel = 'อ่านอย่างเดียว'
+    if (githubUploadRequested) {
+      uploadLabel = githubUploadReady ? 'พร้อมอัปโหลด' : 'รอใส่ token เพื่ออัปโหลด'
+    }
 
     if (!githubPrefs.lastSyncedAt) {
       return `${uploadLabel} • ยังไม่เคยซิงก์จาก GitHub`
@@ -706,35 +705,28 @@ function App() {
       let prefsChanged = false
 
       const hasStoredRepo = Boolean(nextPrefs.github.repo)
-      let configAlreadyApplied = Boolean(nextPrefs.github.configApplied)
+      const configAlreadyApplied = Boolean(nextPrefs.github.configApplied)
+      const shouldApplyConfigFromFile = Boolean(appConfig?.github?.repo) && !configAlreadyApplied && !hasStoredRepo
 
-      if (hasStoredRepo && !configAlreadyApplied) {
+      if (!configAlreadyApplied && (hasStoredRepo || shouldApplyConfigFromFile)) {
         nextPrefs = normalizePrefs({
           ...nextPrefs,
           github: {
             ...nextPrefs.github,
+            ...(shouldApplyConfigFromFile
+              ? {
+                  repo: appConfig.github.repo,
+                  rootPath: appConfig.github.rootPath,
+                  syncMode: appConfig.github.syncMode,
+                  uploadEnabled: appConfig.github.uploadEnabled,
+                  lastSyncedAt: null,
+                }
+              : {}),
             configApplied: true,
           },
         })
         prefsChanged = true
-        configAlreadyApplied = true
-      }
-
-      if (appConfig?.github?.repo && !configAlreadyApplied) {
-        nextPrefs = normalizePrefs({
-          ...nextPrefs,
-          github: {
-            ...nextPrefs.github,
-            repo: appConfig.github.repo,
-            rootPath: appConfig.github.rootPath,
-            syncMode: appConfig.github.syncMode,
-            uploadEnabled: appConfig.github.uploadEnabled,
-            configApplied: true,
-            lastSyncedAt: null,
-          },
-        })
-        prefsChanged = true
-        configApplied = true
+        configApplied = shouldApplyConfigFromFile
       }
 
       if (prefsChanged) {
@@ -958,9 +950,9 @@ function App() {
     })
   }
 
-  function showToast(message) {
+  const showToast = useCallback((message) => {
     setToastMessage(message)
-  }
+  }, [])
 
   function getGithubConfig() {
     if (!githubRepoKey) {
@@ -1600,161 +1592,185 @@ function App() {
     return { folderId: parentId, nextFolders, changed }
   }
 
-  async function handleGithubSync({ silent = false } = {}) {
-    const config = getGithubConfig()
-    if (!config) {
-      if (!silent) {
-        showToast('ต้องตั้งค่า GitHub ก่อน')
-      }
-      return
-    }
-
-    setGhSyncing(true)
-    setGhSyncError('')
-    setStatus('กำลังซิงก์จาก GitHub...')
-
-    try {
-      const files = await fetchGithubFileTree(
-        config.owner,
-        config.repo,
-        config.rootPath || githubRootPath,
-        config.token,
-      )
-
-      if (!files.length) {
-        setStatus(`ไม่พบไฟล์ใน ${config.rootPath || githubRootPath} ของ repo นี้`)
+  const handleGithubSync = useCallback(
+    async ({ silent = false } = {}) => {
+      const parsed = parseGithubRepo(githubRepoKey)
+      if (!parsed) {
         if (!silent) {
-          showToast(`ไม่พบไฟล์ .md ใน ${config.rootPath || githubRootPath}`)
+          showToast('ต้องตั้งค่า GitHub ก่อน')
         }
-        setGhSyncing(false)
         return
       }
 
-      let nextFolders = [...folders]
-      let nextBooks = [...books]
-      const changedBooks = []
-      let foldersChanged = false
-      let added = 0
-      let updated = 0
-      let skipped = 0
+      const config = {
+        owner: parsed.owner,
+        repo: parsed.repo,
+        repoKey: `${parsed.owner}/${parsed.repo}`,
+        token: githubToken,
+        rootPath: githubRootPath,
+      }
 
-      for (const [index, file] of files.entries()) {
-        setStatus(`กำลังซิงก์ ${index + 1}/${files.length}`)
-        const relativePath = stripRootPath(file.path, config.rootPath || githubRootPath)
-        if (relativePath === null) {
-          skipped += 1
-          continue
-        }
-        const pathSegments = relativePath.split('/').filter(Boolean)
-        const fileName = sanitizeFileName(pathSegments.pop() ?? file.path)
-        const { folderId, nextFolders: updatedFolders, changed } = await ensureFolderPath(
-          nextFolders,
-          pathSegments,
-        )
+      setGhSyncing(true)
+      setGhSyncError('')
+      setStatus('กำลังซิงก์จาก GitHub...')
 
-        if (changed) {
-          nextFolders = updatedFolders
-          foldersChanged = true
-        }
-
-        const existingBySource = nextBooks.find(
-          (book) =>
-            book.source?.type === 'github' &&
-            book.source.repo === config.repoKey &&
-            book.source.path === file.path,
-        )
-
-        if (existingBySource && existingBySource.source?.sha === file.sha) {
-          skipped += 1
-          continue
-        }
-
-        const existingByName = nextBooks.find(
-          (book) =>
-            book.folderId === folderId &&
-            normalizeToLowerCase(book.fileName) === normalizeToLowerCase(fileName),
-        )
-
-        const { content, sha } = await fetchGithubFileContent(
+      try {
+        const files = await fetchGithubFileTree(
           config.owner,
           config.repo,
-          file.path,
+          config.rootPath,
           config.token,
         )
 
-        const source = {
-          type: 'github',
-          repo: config.repoKey,
-          path: file.path,
-          sha: sha ?? file.sha,
+        if (!files.length) {
+          setStatus(`ไม่พบไฟล์ใน ${config.rootPath} ของ repo นี้`)
+          if (!silent) {
+            showToast(`ไม่พบไฟล์ .md ใน ${config.rootPath}`)
+          }
+          setGhSyncing(false)
+          return
         }
 
-        if (existingBySource || existingByName) {
-          const target = existingBySource ?? existingByName
-          const updatedBook = {
-            ...target,
-            fileName,
-            title: stripExtension(fileName),
-            content,
-            excerpt: extractLead(content),
-            updatedAt: Date.now(),
-            source,
+        let nextFolders = [...folders]
+        let nextBooks = [...books]
+        const changedBooks = []
+        let foldersChanged = false
+        let added = 0
+        let updated = 0
+        let skipped = 0
+
+        for (const [index, file] of files.entries()) {
+          setStatus(`กำลังซิงก์ ${index + 1}/${files.length}`)
+          const relativePath = stripRootPath(file.path, config.rootPath)
+          if (relativePath === null) {
+            skipped += 1
+            continue
           }
-          nextBooks = nextBooks.map((book) => (book.id === updatedBook.id ? updatedBook : book))
-          changedBooks.push(updatedBook)
-          updated += 1
-        } else {
-          const newBook = {
-            id: createId('book'),
-            title: stripExtension(fileName),
-            fileName,
-            folderId,
-            content,
-            excerpt: extractLead(content),
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-            lastOpenedAt: null,
-            lastReadAt: null,
-            progress: 0,
-            readerFontSize: prefs.fontSize,
-            bookmarks: [],
-            source,
+          const pathSegments = relativePath.split('/').filter(Boolean)
+          const fileName = sanitizeFileName(pathSegments.pop() ?? file.path)
+          const { folderId, nextFolders: updatedFolders, changed } = await ensureFolderPath(
+            nextFolders,
+            pathSegments,
+          )
+
+          if (changed) {
+            nextFolders = updatedFolders
+            foldersChanged = true
           }
-          nextBooks = [newBook, ...nextBooks]
-          changedBooks.push(newBook)
-          added += 1
+
+          const existingBySource = nextBooks.find(
+            (book) =>
+              book.source?.type === 'github' &&
+              book.source.repo === config.repoKey &&
+              book.source.path === file.path,
+          )
+
+          if (existingBySource && existingBySource.source?.sha === file.sha) {
+            skipped += 1
+            continue
+          }
+
+          const existingByName = nextBooks.find(
+            (book) =>
+              book.folderId === folderId &&
+              normalizeToLowerCase(book.fileName) === normalizeToLowerCase(fileName),
+          )
+
+          const { content, sha } = await fetchGithubFileContent(
+            config.owner,
+            config.repo,
+            file.path,
+            config.token,
+          )
+
+          const source = {
+            type: 'github',
+            repo: config.repoKey,
+            path: file.path,
+            sha: sha ?? file.sha,
+          }
+
+          if (existingBySource || existingByName) {
+            const target = existingBySource ?? existingByName
+            const updatedBook = {
+              ...target,
+              fileName,
+              title: stripExtension(fileName),
+              content,
+              excerpt: extractLead(content),
+              updatedAt: Date.now(),
+              source,
+            }
+            nextBooks = nextBooks.map((book) => (book.id === updatedBook.id ? updatedBook : book))
+            changedBooks.push(updatedBook)
+            updated += 1
+          } else {
+            const newBook = {
+              id: createId('book'),
+              title: stripExtension(fileName),
+              fileName,
+              folderId,
+              content,
+              excerpt: extractLead(content),
+              createdAt: Date.now(),
+              updatedAt: Date.now(),
+              lastOpenedAt: null,
+              lastReadAt: null,
+              progress: 0,
+              readerFontSize: prefs.fontSize,
+              bookmarks: [],
+              source,
+            }
+            nextBooks = [newBook, ...nextBooks]
+            changedBooks.push(newBook)
+            added += 1
+          }
         }
-      }
 
-      if (foldersChanged) {
-        await syncFolders(nextFolders)
-      }
-      if (changedBooks.length) {
-        await putBooks(changedBooks)
-        await syncBooks(nextBooks)
-      }
+        if (foldersChanged) {
+          await syncFolders(nextFolders)
+        }
+        if (changedBooks.length) {
+          await putBooks(changedBooks)
+          await syncBooks(nextBooks)
+        }
 
-      const syncedAt = Date.now()
-      await syncPrefs({
-        ...prefs,
-        github: {
-          ...githubPrefs,
-          lastSyncedAt: syncedAt,
-        },
-      })
+        const syncedAt = Date.now()
+        await syncPrefs({
+          ...prefs,
+          github: {
+            ...githubPrefs,
+            lastSyncedAt: syncedAt,
+          },
+        })
 
-      setStatus(`ซิงก์ GitHub แล้ว ใหม่ ${added} • อัปเดต ${updated} • ข้าม ${skipped}`)
-      if (!silent) {
-        showToast('ซิงก์จาก GitHub เสร็จแล้ว')
+        setStatus(`ซิงก์ GitHub แล้ว ใหม่ ${added} • อัปเดต ${updated} • ข้าม ${skipped}`)
+        if (!silent) {
+          showToast('ซิงก์จาก GitHub เสร็จแล้ว')
+        }
+      } catch (error) {
+        setGhSyncError(String(error.message ?? error))
+        setStatus('ซิงก์ GitHub ไม่สำเร็จ')
+        showToast('ซิงก์ GitHub ไม่สำเร็จ')
+      } finally {
+        setGhSyncing(false)
       }
-    } catch (error) {
-      setGhSyncError(String(error.message ?? error))
-      setStatus('ซิงก์ GitHub ไม่สำเร็จ')
-      showToast('ซิงก์ GitHub ไม่สำเร็จ')
-    } finally {
-      setGhSyncing(false)
-    }
-  }
+    },
+    [
+      books,
+      ensureFolderPath,
+      folders,
+      githubPrefs,
+      githubRepoKey,
+      githubRootPath,
+      githubToken,
+      prefs,
+      showToast,
+      syncBooks,
+      syncFolders,
+      syncPrefs,
+    ],
+  )
 
   async function handleGithubFetch() {
     const parsed = parseGithubRepo(ghRepo)
