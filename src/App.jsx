@@ -705,7 +705,10 @@ function App() {
       let configApplied = false
       let prefsChanged = false
 
-      if (nextPrefs.github.repo && !nextPrefs.github.configApplied) {
+      const hasStoredRepo = Boolean(nextPrefs.github.repo)
+      let hasConfigAppliedFlag = Boolean(nextPrefs.github.configApplied)
+
+      if (hasStoredRepo && !hasConfigAppliedFlag) {
         nextPrefs = normalizePrefs({
           ...nextPrefs,
           github: {
@@ -714,9 +717,10 @@ function App() {
           },
         })
         prefsChanged = true
+        hasConfigAppliedFlag = true
       }
 
-      if (appConfig?.github?.repo && !nextPrefs.github.configApplied) {
+      if (appConfig?.github?.repo && !hasConfigAppliedFlag) {
         nextPrefs = normalizePrefs({
           ...nextPrefs,
           github: {
