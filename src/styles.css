@@ -1152,6 +1152,20 @@ select {
   color: var(--ink-soft);
 }
 
+.gh-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.9rem;
+  color: var(--ink);
+}
+
+.gh-toggle input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--amber);
+}
+
 .gh-optional {
   font-size: 0.82rem;
   color: var(--ink-muted);
