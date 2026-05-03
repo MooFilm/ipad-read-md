@@ -42,7 +42,10 @@ https://YOUR-USERNAME.github.io/YOUR-REPOSITORY/
 
 ถ้าต้องการอัปโหลดไฟล์จากคอมแล้วเปิดอ่านบน iPad ได้ทันที โดยไม่ต้องใช้ git CLI:
 
-1. ไปที่ `public/readshelf.config.json` แล้วใส่ค่า repo (เช่น `owner/repo`)
+> รีโปนี้ตั้งค่าอ่านแบบ public ไว้แล้วใน `public/readshelf.config.json` จึงไม่ต้องใส่ token
+> ถ้าฟอร์กหรือใช้ repo อื่น ให้แก้ค่า `repo` เป็น `owner/repo` ของคุณ
+
+1. (ถ้าจำเป็น) ไปที่ `public/readshelf.config.json` แล้วใส่ค่า repo (เช่น `owner/repo`)
 2. ตั้ง `syncMode` เป็น `"auto"` เพื่อให้ซิงก์อัตโนมัติเมื่อเปิดแอปหรือกลับมาใช้งาน
 3. push ไฟล์ขึ้น GitHub (ทำผ่านเว็บ GitHub ได้)
 4. อัปโหลดไฟล์ .md ผ่านหน้าเว็บ GitHub ไปที่โฟลเดอร์ `public/docs`
