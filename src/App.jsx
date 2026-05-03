@@ -2150,19 +2150,8 @@ function App() {
             <button type="button" className="ghost-button" onClick={() => openFolderEditor('create')}>
               {currentFolder?.parentId ? 'เพิ่มโฟลเดอร์ย่อย' : 'เพิ่มโฟลเดอร์'}
             </button>
-            <button
-              type="button"
-              className="ghost-button"
-              onClick={() => handleGithubSync()}
-              disabled={ghSyncing}
-            >
-              {ghSyncing ? 'กำลังซิงก์...' : 'ซิงก์ GitHub'}
-            </button>
             <button type="button" className="ghost-button" onClick={openGhModal} disabled={ghSyncing}>
               นำเข้าจาก GitHub
-            </button>
-            <button type="button" className="ghost-button" onClick={openGhSettings}>
-              ตั้งค่า GitHub
             </button>
             <button type="button" className="ghost-button" onClick={handleShareBackup}>
               แบ็กอัป
@@ -2198,7 +2187,7 @@ function App() {
               </article>
               <article>
                 <strong>GitHub Cloud</strong>
-                <p>ถ้า repo เป็น public ให้ใส่ค่าใน readshelf.config.json แล้วเลือกโหมดซิงก์อัตโนมัติ เพื่อให้ดึงไฟล์เมื่อเปิดแอปหรือกลับมาใช้งาน (โหมดกดซิงก์เองใช้ปุ่ม “ซิงก์ GitHub”)</p>
+                <p>ถ้า repo เป็น public ให้ใส่ค่าใน readshelf.config.json แล้วระบบจะซิงก์อัตโนมัติเมื่อเปิดแอปหรือกลับมาใช้งาน</p>
               </article>
               <article>
                 <strong>โหมดจัดเก็บ</strong>
@@ -2393,7 +2382,7 @@ function App() {
                 placeholder="ghp_xxxxxxxxxxxx"
                 disabled={ghStatus === 'fetching' || ghStatus === 'importing'}
               />
-              <p className="gh-token-note">ถ้าต้องการบันทึก token ไว้ใช้งานข้ามครั้ง ให้ไปที่ “ตั้งค่า GitHub”</p>
+              <p className="gh-token-note">token นี้จะใช้เฉพาะการนำเข้าครั้งนี้ และจะไม่ถูกบันทึกไว้</p>
             </div>
 
             {ghError ? <p className="gh-error">{ghError}</p> : null}
