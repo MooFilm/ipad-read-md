@@ -1238,6 +1238,59 @@ function App() {
     setStatus('ลบหนังสือแล้ว')
   }
 
+  async function handleUploadBook(bookId) {
+    const book = books.find((item) => item.id === bookId)
+    if (!book) return
+
+    const config = getGithubConfig()
+    if (!config || !config.token) {
+      showToast('ต้องใส่ GitHub token ในไฟล์ .env ก่อนจึงจะอัปโหลดได้')
+      return
+    }
+
+    setStatus(`กำลังอัปโหลด ${book.title}...`)
+    
+    try {
+      const folderSegments = getGithubFolderSegments(book.folderId)
+      const targetName = sanitizeFileName(book.fileName)
+      const targetPath = buildGithubPath(config.rootPath, folderSegments, targetName)
+      
+      const existing = await fetchGithubFileMeta(config.owner, config.repo, targetPath, config.token)
+      if (existing?.isDirectory) {
+        showToast('ชื่อไฟล์ชนกับโฟลเดอร์ใน GitHub')
+        return
+      }
+
+      const sha = await uploadGithubFile({
+        owner: config.owner,
+        repo: config.repo,
+        filePath: targetPath,
+        content: book.content,
+        message: `Upload ${targetName} via ReadShelf`,
+        token: config.token,
+        sha: existing?.sha ?? null,
+      })
+
+      const updatedBook = {
+        ...book,
+        source: {
+          type: 'github',
+          repo: config.repoKey,
+          path: targetPath,
+          sha,
+        },
+      }
+      
+      await updateBook(book.id, updatedBook)
+      setBookActionId(null)
+      showToast(`อัปโหลด ${book.title} สำเร็จ`)
+      setStatus('อัปโหลดไฟล์เสร็จสิ้น')
+    } catch (error) {
+      showToast(`อัปโหลดไม่สำเร็จ: ${String(error.message ?? error)}`)
+      setStatus('อัปโหลดไม่สำเร็จ')
+    }
+  }
+
   async function handleMoveBook(targetFolderId) {
     if (!bookMoveId || !targetFolderId) {
       return
@@ -1717,6 +1770,9 @@ function App() {
                         </button>
                         <button type="button" onClick={() => setBookMoveId(book.id)}>
                           ย้ายโฟลเดอร์
+                        </button>
+                        <button type="button" onClick={() => handleUploadBook(book.id)}>
+                          อัปโหลดขึ้นเว็บ
                         </button>
                         <button type="button" className="danger" onClick={() => handleDeleteBook(book.id)}>
                           ลบหนังสือ
